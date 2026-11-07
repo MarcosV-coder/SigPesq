@@ -8,7 +8,7 @@ CREATE TABLE projeto (
     data_inicio DATE NOT NULL,
     data_termino DATE,
     
-    CONSTRAINT chk_projeto_datas CHECK (dfinanciamentocodigo_financiamentoata_termino IS NULL OR data_termino >= data_inicio)
+    CONSTRAINT chk_projeto_datas CHECK (data_termino IS NULL OR data_termino >= data_inicio)
 );
 
 CREATE TABLE participante (
@@ -78,3 +78,4 @@ CREATE TABLE vinculo_projeto_financiamento (
         ON DELETE CASCADE
         ON UPDATE CASCADE
 );
+-- DROP DATABASE IF EXISTS sigpesq;

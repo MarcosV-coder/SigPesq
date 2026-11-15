@@ -57,6 +57,16 @@ def carregar(modulo,s):
             destinos=linhas(cur,'SELECT codigo_projeto,codigo_financiamento FROM vinculo_projeto_financiamento')
             for r in rows:
                 r['projetos_apoiados']=', '.join(titulos[v['codigo_projeto']] for v in destinos if v['codigo_financiamento']==r['codigo_financiamento'] and v['codigo_projeto'] in titulos)
+        if modulo=='producoes':
+            equipes=linhas(cur,'SELECT v.codigo_projeto,v.cpf,p.nome FROM vinculo_projeto_participante v JOIN participante p ON p.cpf=v.cpf ORDER BY p.nome,v.cpf')
+            opcoes['autores_por_projeto']={}
+            for v in equipes:
+                opcoes['autores_por_projeto'].setdefault(v['codigo_projeto'],[]).append((v['cpf'],v['nome']))
+            autorias=linhas(cur,'SELECT a.codigo_projeto,a.codigo_prod,a.cpf,p.nome FROM autoria_producao a JOIN participante p ON p.cpf=a.cpf ORDER BY p.nome,a.cpf')
+            for r in rows:
+                autores=[a for a in autorias if (a['codigo_projeto'],a['codigo_prod'])==(r['codigo_projeto'],r['codigo_prod'])]
+                r['autores']=[a['cpf'] for a in autores]
+                r['nomes_autores']='; '.join(a['nome'] for a in autores)
         return rows,opcoes
 
 def _validar(m,dados):
@@ -73,11 +83,12 @@ def _validar(m,dados):
 
 def salvar(modulo,dados,s=None,chave=None,cadastro=False):
     m=MODELOS[modulo]; d=_validar(m,dados)
+    autores=validar_autores(dados.get('autores')) if modulo=='producoes' else []
     pk=m['pk']; key=tuple(d[k] for k in pk)
     if chave is not None and key!=tuple(chave): raise ValueError('A chave do registro não pode ser alterada.')
     with transacao() as cur:
         # Todas as escritas da aplicação usam o mesmo lock transacional, já que
-        # referências e unicidade de e-mail são verificadas sem constraints SQL.
+        # referências e unicidade de e-mail também são verificadas na aplicação.
         cur.execute("SELECT GET_LOCK('sigpesq_escrita',10) AS ok")
         if cur.fetchone()['ok']!=1: raise ValueError('Banco ocupado. Tente novamente.')
         try:
@@ -108,6 +119,10 @@ def salvar(modulo,dados,s=None,chave=None,cadastro=False):
             for campo,tabela,col in [('codigo_projeto','projeto','codigo_projeto'),('cpf','participante','cpf'),('codigo_financiamento','financiamento','codigo_financiamento')]:
                 if campo in d and m['tabela']!=tabela:
                     if not linhas(cur,f'SELECT {col} FROM {tabela} WHERE {col}=%s',(d[campo],)): raise ValueError('O registro relacionado não existe.')
+            if modulo=='producoes':
+                equipe={r['cpf'] for r in linhas(cur,'SELECT cpf FROM vinculo_projeto_participante WHERE codigo_projeto=%s',(d['codigo_projeto'],))}
+                if not set(autores)<=equipe:
+                    raise ValueError('Todos os autores devem estar vinculados ao projeto da produção.')
             if modulo=='alocacoes':
                 contrato=linhas(cur,'SELECT valor_total FROM financiamento WHERE codigo_financiamento=%s',(d['codigo_financiamento'],))[0]
                 soma=sum(r['valor_destinado'] for r in linhas(cur,'SELECT valor_destinado FROM vinculo_projeto_financiamento WHERE codigo_financiamento=%s AND codigo_projeto<>%s',(d['codigo_financiamento'],d['codigo_projeto'])))
@@ -115,6 +130,30 @@ def salvar(modulo,dados,s=None,chave=None,cadastro=False):
             if modulo=='financiamentos' and chave:
                 soma=sum(r['valor_destinado'] for r in linhas(cur,'SELECT valor_destinado FROM vinculo_projeto_financiamento WHERE codigo_financiamento=%s',key))
                 if soma>d['valor_total']: raise ValueError('Valor inferior ao total já destinado.')
+
+            if (
+                modulo == 'vinculos'
+                and d['funcao_desempenhada'] == 3
+            ):
+                coordenadores = linhas(
+                    cur,
+                    '''
+                    SELECT cpf
+                    FROM vinculo_projeto_participante
+                    WHERE codigo_projeto = %s
+                      AND funcao_desempenhada = 3
+                      AND cpf <> %s
+                    ''',
+                    (d['codigo_projeto'], d['cpf'])
+                )
+
+                if coordenadores:
+                    raise ValueError(
+                        'Este projeto já possui um coordenador. '
+                        'Altere a função do coordenador atual antes '
+                        'de definir outro.'
+                    )
+                
             cols=list(d)
             if chave is None:
                 cur.execute(f"INSERT INTO {m['tabela']} ({','.join(cols)}) VALUES ({','.join(['%s']*len(cols))})",tuple(d.values()))
@@ -124,6 +163,10 @@ def salvar(modulo,dados,s=None,chave=None,cadastro=False):
             else:
                 cols=[c for c in cols if c not in pk]
                 cur.execute(f"UPDATE {m['tabela']} SET {','.join(c+'=%s' for c in cols)} WHERE {where}",tuple(d[c] for c in cols)+key)
+            if modulo=='producoes':
+                cur.execute('DELETE FROM autoria_producao WHERE codigo_projeto=%s AND codigo_prod=%s',key)
+                for cpf in autores:
+                    cur.execute('INSERT INTO autoria_producao (codigo_projeto,codigo_prod,cpf) VALUES (%s,%s,%s)',key+(cpf,))
             # Libera somente após commit, evitando corrida na verificação de e-mail.
             cur.execute('COMMIT')
         except Exception:
@@ -134,14 +177,20 @@ def salvar(modulo,dados,s=None,chave=None,cadastro=False):
             cur.fetchall()
 
 def excluir(modulo,chave,s):
-    # Exclusão reservada ao administrador; cascatas explícitas, sem FKs.
+    # Exclusão reservada ao administrador; remoções explícitas e proteção das autorias.
     if not s or not s.admin: raise ValueError('Somente o administrador pode excluir registros.')
     m=MODELOS[modulo]
     with transacao() as cur:
         cur.execute("SELECT GET_LOCK('sigpesq_escrita',10) AS ok")
         if cur.fetchone()['ok']!=1: raise ValueError('Banco ocupado.')
         try:
+            if modulo=='vinculos' and linhas(cur,'SELECT cpf FROM autoria_producao WHERE codigo_projeto=%s AND cpf=%s',chave):
+                raise ValueError('Este participante é autor de produções do projeto. Edite os autores antes de remover o vínculo.')
+            if modulo=='participantes' and linhas(cur,'SELECT cpf FROM autoria_producao WHERE cpf=%s',chave):
+                raise ValueError('Este participante é autor de produções. Edite os autores antes de excluir sua conta.')
             if modulo=='projetos':
+                # Remove autorias antes dos vínculos protegidos por RESTRICT.
+                cur.execute('DELETE FROM autoria_producao WHERE codigo_projeto=%s',chave)
                 for t in ('producao_cientifica','vinculo_projeto_participante','vinculo_projeto_financiamento'):
                     cur.execute(f'DELETE FROM {t} WHERE codigo_projeto=%s',chave)
             if modulo=='participantes': cur.execute('DELETE FROM vinculo_projeto_participante WHERE cpf=%s',chave)
@@ -153,3 +202,10 @@ def excluir(modulo,chave,s):
             cur.execute('ROLLBACK'); raise
         finally:
             cur.execute("SELECT RELEASE_LOCK('sigpesq_escrita')"); cur.fetchall()
+
+
+def validar_autores(valores):
+    from validacao import cpf_limpo
+    if not isinstance(valores,(list,tuple)) or not valores:
+        raise ValueError('Selecione pelo menos um autor para a produção científica.')
+    return list(dict.fromkeys(cpf_limpo(str(cpf)) for cpf in valores))

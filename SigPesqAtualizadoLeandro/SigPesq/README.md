@@ -92,7 +92,36 @@ do projeto 101, `bruno@exemplo.com` é técnico vinculado ao 101 e
   **da aplicação**, não a senha do usuário MySQL `root`.
 - Pode fechar o Workbench após importar os SQLs; mantenha o servidor MySQL ligado.
 - Se a conexão falhar, confira os dados e rode `configurar.py` novamente.
-- Somente as chaves primárias permanecem como restrições no SQL; validações e
-  relacionamentos são tratados na aplicação.
+- Chaves primárias e estrangeiras definem a identidade e os relacionamentos no SQL;
+  validações e permissões adicionais são tratadas na aplicação.
 - No Linux/macOS, substitua `.venv\Scripts\python` por `.venv/bin/python`.
   O Python precisa ter Tkinter disponível.
+
+
+## Autores das produções científicas
+
+Para um banco que já existe, execute `database/03_autores.sql` no Workbench
+antes de abrir esta versão. Esse script somente cria a tabela de autorias.
+Não execute novamente os scripts de criação e dados iniciais no banco existente.
+Para uma instalação nova, execute `01_banco.sql` e depois `02_dados_iniciais.sql`.
+
+No cadastro ou edição de uma produção, escolha o projeto e marque um ou mais
+autores. Somente os participantes vinculados àquele projeto são oferecidos.
+A lista muda quando o projeto é alterado. Os autores salvos aparecem em Detalhes
+e podem ser encontrados pela busca da consulta de produções.
+A aplicação exige pelo menos um autor, confirma o vínculo novamente ao salvar
+e grava produção e autoria na mesma transação.
+
+A nova tabela `autoria_producao` identifica cada autoria por
+`(codigo_projeto, codigo_prod, cpf)`. Uma FK composta aponta para a produção
+com cascatas de atualização e exclusão. Outra aponta para o vínculo da equipe,
+com atualização em cascata e exclusão restrita para preservar a autoria.
+Remova ou substitua o autor nas produções antes de excluir seu vínculo ou conta.
+Excluir um projeto pela aplicação remove suas produções, autorias e vínculos.
+
+Produções antigas continuam preservadas, com autoria pendente; abra cada uma
+para definir seus autores reais. Não são escolhidos autores automaticamente.
+Vínculos encerrados também podem ser autores, preservando a autoria histórica;
+não há exigência de vínculo ativo na data atual.
+O banco agora possui sete tabelas. O roteiro de revisão anterior descrevia a
+versão com seis tabelas e deve considerar essa nova associação de autoria.

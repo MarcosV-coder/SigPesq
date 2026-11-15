@@ -75,6 +75,8 @@ def validar(campos, valores):
         raise ValueError('Informe um e-mail válido, por exemplo nome@universidade.br.')
     if 'nome' in dados and not re.fullmatch(r'[a-zA-ZÀ-ÿ ]+', dados['nome']):
         raise ValueError('Nome deve conter apenas letras e espaços.')
+    if dados.get('situacao') == 2 and not dados.get('data_termino'):
+        raise ValueError('Projetos concluídos devem ter data de término.')
     for a,b in [('data_inicio','data_termino'),('data_entrada','data_saida'),('inicio','fim')]:
         if dados.get(b) and (not dados.get(a) or dados[b] < dados[a]):
             raise ValueError('O término exige um início e não pode ser anterior a ele.')

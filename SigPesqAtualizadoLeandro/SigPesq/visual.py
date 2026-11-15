@@ -22,6 +22,10 @@ def label(master,text='',size=14,bold=False,color=TEXTO,**kwargs):
     return ctk.CTkLabel(master,text=text,font=fonte(size,bold),text_color=color,**kwargs)
 
 def botao(master,text,command,kind='primary',icon=None,width=100,height=38,**kwargs):
+    # Reserva a largura real do texto, do ícone e das margens internas.
+    if text:
+        medida=ctk.CTkFont(family=FONTE,size=15,weight='bold').measure(text)
+        width=max(width,medida+(60 if icon else 32))
     cor=AZUL if kind=='primary' else CLARO
     fg=BRANCO if kind=='primary' else (CIANO if kind=='accent' else TITULO)
     return ctk.CTkButton(master,text=text,command=command,width=width,height=height,corner_radius=8,

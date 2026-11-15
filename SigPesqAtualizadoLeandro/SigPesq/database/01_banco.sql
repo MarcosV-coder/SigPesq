@@ -1,8 +1,9 @@
--- Base NOVA. Não migra nem apaga o banco antigo.
-CREATE DATABASE IF NOT EXISTS sigpesq CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE IF NOT EXISTS sigpesq
+    CHARACTER SET utf8mb4
+    COLLATE utf8mb4_unicode_ci;
+
 USE sigpesq;
--- Somente PRIMARY KEY permanece como identidade técnica dos registros.
--- Regras, relações, exclusões relacionadas e e-mails únicos: aplicação Python.
+
 CREATE TABLE projeto (
     codigo_projeto INT UNSIGNED,
     titulo VARCHAR(100),
@@ -11,7 +12,7 @@ CREATE TABLE projeto (
     data_inicio DATE,
     data_termino DATE,
     PRIMARY KEY (codigo_projeto)
-) ENGINE=InnoDB;
+);
 
 CREATE TABLE participante (
     cpf CHAR(11),
@@ -20,7 +21,7 @@ CREATE TABLE participante (
     tipo_participante INT,
     senha VARCHAR(255),
     PRIMARY KEY (cpf)
-) ENGINE=InnoDB;
+);
 
 CREATE TABLE financiamento (
     codigo_financiamento INT UNSIGNED,
@@ -30,7 +31,7 @@ CREATE TABLE financiamento (
     data_inicio DATE,
     data_termino DATE,
     PRIMARY KEY (codigo_financiamento)
-) ENGINE=InnoDB;
+);
 
 CREATE TABLE producao_cientifica (
     codigo_projeto INT UNSIGNED,
@@ -38,9 +39,14 @@ CREATE TABLE producao_cientifica (
     titulo VARCHAR(100),
     tipo_prod INT,
     meio_divulgacao INT,
-    ano_publicacao SMALLINT UNSIGNED,
-    PRIMARY KEY (codigo_projeto, codigo_prod)
-) ENGINE=InnoDB;
+    ano_publicacao INT UNSIGNED,
+    PRIMARY KEY (codigo_projeto, codigo_prod),
+
+    FOREIGN KEY (codigo_projeto)
+        REFERENCES projeto (codigo_projeto)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+);
 
 CREATE TABLE vinculo_projeto_participante (
     codigo_projeto INT UNSIGNED,
@@ -48,13 +54,32 @@ CREATE TABLE vinculo_projeto_participante (
     funcao_desempenhada INT,
     data_entrada DATE,
     data_saida DATE,
-    PRIMARY KEY (codigo_projeto, cpf)
-) ENGINE=InnoDB;
+    PRIMARY KEY (codigo_projeto, cpf),
+
+    FOREIGN KEY (codigo_projeto)
+        REFERENCES projeto (codigo_projeto)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE,
+
+    FOREIGN KEY (cpf)
+        REFERENCES participante (cpf)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+);
 
 CREATE TABLE vinculo_projeto_financiamento (
     codigo_projeto INT UNSIGNED,
     codigo_financiamento INT UNSIGNED,
     valor_destinado DECIMAL(20,2),
-    PRIMARY KEY (codigo_projeto, codigo_financiamento)
-) ENGINE=InnoDB;
+    PRIMARY KEY (codigo_projeto, codigo_financiamento),
 
+    FOREIGN KEY (codigo_projeto)
+        REFERENCES projeto (codigo_projeto)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE,
+
+    FOREIGN KEY (codigo_financiamento)
+        REFERENCES financiamento (codigo_financiamento)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+);

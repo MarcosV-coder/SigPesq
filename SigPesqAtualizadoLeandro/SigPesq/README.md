@@ -41,13 +41,13 @@ Pressione **Enter** para aceitar os valores que aparecem entre colchetes. Se a s
 usa outros valores, informe os mesmos do Workbench. A senha será pedida em seu
 próprio campo e **não aparece enquanto você digita**.
 
-## 3. Abrir e editar tudo como administrador
+## 3. Abrir a aplicação
 
 ```console
 .venv\Scripts\python main.py
 ```
 
-Na tela de login, use:
+Na tela de login, para utilizar como administrador geral, use:
 
 | Login | Senha |
 | --- | --- |

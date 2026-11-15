@@ -11,6 +11,7 @@ import repositorio as repo
 from modelos import MODELOS, TIPOS
 from seguranca import autenticar
 from validacao import formatar
+from mascaras import aplicar_mascara
 from db import mensagem_erro
 from visual import *
 
@@ -28,7 +29,7 @@ class App(ctk.CTk):
         self.sessao=None; self.pendente=False; self.modal=None; self.modulo=None
         self.pool=ThreadPoolExecutor(max_workers=1); self.fila=Queue()
         self.status=tk.StringVar()
-        self.header=ctk.CTkFrame(self,fg_color=FUNDO,corner_radius=0,height=78)
+        self.header=ctk.CTkFrame(self,fg_color=FUNDO,corner_radius=0,height=116)
         self.header.pack(fill='x'); self.header.pack_propagate(False)
         self.body=ctk.CTkFrame(self,fg_color=FUNDO,corner_radius=0)
         self.body.pack(fill='both',expand=True,padx=28,pady=(8,0))
@@ -65,21 +66,26 @@ class App(ctk.CTk):
         self.pool.shutdown(wait=False,cancel_futures=True); self.destroy()
 
     def cabecalho(self,ativo=None):
-        logo=ctk.CTkButton(self.header,text='SIGPesq',font=fonte(20,True),fg_color='transparent',text_color=TITULO,
+        top=ctk.CTkFrame(self.header,fg_color='transparent',height=62)
+        top.pack(side='top',fill='x'); top.pack_propagate(False)
+        logo=ctk.CTkButton(top,text='SIGPesq',font=fonte(20,True),fg_color='transparent',text_color=TITULO,
                           hover_color=CLARO,width=100,command=self.home if self.sessao else self.login)
         logo.pack(side='left',padx=(24,12),pady=20)
-        ctk.CTkFrame(self.header,fg_color='#ccd4e1',width=1,height=22).pack(side='left',padx=(0,12))
+        ctk.CTkFrame(top,fg_color='#ccd4e1',width=1,height=22).pack(side='left',padx=(0,12))
         if self.sessao:
+            # Navegação em linha própria deixa espaço para o nome completo.
+            nav=ctk.CTkFrame(self.header,fg_color='transparent',height=42)
+            nav.pack(side='bottom',fill='x',padx=24,pady=(0,6))
             for k,n in NAV.items():
-                btn=ctk.CTkButton(self.header,text=n,font=fonte(13,k==ativo),width=10,height=34,corner_radius=8,
+                btn=ctk.CTkButton(nav,text=n,font=fonte(13,k==ativo),width=10,height=34,corner_radius=8,
                                   fg_color=TITULO if k==ativo else 'transparent',
                                   hover_color=AZUL if k==ativo else CLARO,text_color=BRANCO if k==ativo else TEXTO,
                                   command=lambda k=k:self.consulta(k))
                 btn.pack(side='left',padx=3)
-            botao(self.header,'',self.login,kind='secondary',icon='logout',width=34,height=34).pack(side='right',padx=(7,24))
-            account=ctk.CTkFrame(self.header,fg_color='transparent')
+            botao(top,'',self.login,kind='secondary',icon='logout',width=34,height=34).pack(side='right',padx=(7,24))
+            account=ctk.CTkFrame(top,fg_color='transparent')
             account.pack(side='right',padx=(5,0))
-            label(account,'Administrador geral' if self.sessao.admin else self.sessao.nome[:23],size=11,bold=True,color=TITULO,anchor='e').pack(anchor='e')
+            label(account,'Administrador geral' if self.sessao.admin else self.sessao.nome,size=11,bold=True,color=TITULO,anchor='e',justify='right',wraplength=700).pack(anchor='e')
 
     def login(self):
         if self.pendente or self.modal: return
@@ -152,10 +158,11 @@ class App(ctk.CTk):
         self.panel=ctk.CTkFrame(self.body,fg_color=BRANCO,corner_radius=13,border_width=1,border_color=BORDA)
         self.panel.pack(fill='both',expand=True,pady=(0,12))
         toolbar=ctk.CTkFrame(self.panel,fg_color='transparent'); toolbar.pack(fill='x',padx=22,pady=(21,13))
-        label(toolbar,tabela,size=17,bold=True,color=TITULO).pack(side='left')
+        toolbar.grid_columnconfigure(0,weight=1)
+        label(toolbar,tabela,size=17,bold=True,color=TITULO).grid(row=0,column=0,sticky='w')
         self.contagem=tk.StringVar(value='0 cadastros')
-        label(toolbar,textvariable=self.contagem,text='',size=11,bold=True,color=AZUL,fg_color='#d5e9ff',corner_radius=12,height=24).pack(side='left',padx=10,ipadx=9)
-        self.novo=botao(toolbar,novo,lambda:self.formulario(self.modulo),icon='plus'); self.novo.pack(side='right')
+        label(toolbar,textvariable=self.contagem,text='',size=11,bold=True,color=AZUL,fg_color='#d5e9ff',corner_radius=12,height=24).grid(row=0,column=1,padx=10,ipadx=9)
+        self.novo=botao(toolbar,novo,lambda:self.formulario(self.modulo),icon='plus'); self.novo.grid(row=1,column=0,columnspan=2,sticky='e',pady=(10,0))
         filters=ctk.CTkFrame(self.panel,fg_color='transparent'); filters.pack(fill='x',padx=22,pady=(0,14))
         self.busca=tk.StringVar()
         self.search=ctk.CTkEntry(filters,placeholder_text='Buscar por nome, título, código ou projeto...',height=40,fg_color=CLARO,border_width=0,font=fonte(13),text_color=TITULO)
@@ -392,8 +399,18 @@ class App(ctk.CTk):
                 placeholder='DD/MM/AAAA' if c.tipo=='data' else ('Deixe vazio para manter a senha' if c.tipo=='senha' and registro else ('Mínimo de 8 caracteres' if c.tipo=='senha' else ''))
                 w=ctk.CTkEntry(area,show='*' if c.tipo=='senha' else '',placeholder_text=placeholder,height=42,fg_color=CLARO,border_width=0,text_color=TITULO,font=fonte(13))
                 if value is not None: w.insert(0,formatar(value).replace('R$ ',''))
+            if not c.opcoes and c.tipo not in ('multilinha','projeto','participante','financiamento'):
+                aplicar_mascara(w,c.tipo)
             w.pack(fill='x',padx=12); widgets[c.nome]=w
             if registro and (c.nome in m['pk'] or (c.nome=='tipo_participante' and not self.sessao.admin)): w.configure(state='disabled')
+        if modulo=='projetos':
+            aviso=label(area,'',size=11,color=MUTED,anchor='w')
+            aviso.pack(fill='x',padx=12,pady=(6,0))
+            def situacao_alterada(valor=None):
+                concluido=widgets['situacao'].get()=='Concluído'
+                aviso.configure(text='* Término obrigatório para projeto concluído.' if concluido else 'Término opcional enquanto o projeto não estiver concluído.')
+            widgets['situacao'].configure(command=situacao_alterada)
+            situacao_alterada()
         def salvar():
             dados={}
             for c in m['campos']:

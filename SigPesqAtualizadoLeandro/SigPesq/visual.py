@@ -77,6 +77,6 @@ COLUNAS={
  'projetos':[('CÓD.',7),('TÍTULO',19),('DESCRIÇÃO',20),('COORDENAÇÃO',15),('VIGÊNCIA',14),('SITUAÇÃO',14),('AÇÕES',11)],
  'participantes':[('CPF',16),('NOME',27),('E-MAIL',28),('TIPO',18),('AÇÕES',11)],
  'financiamentos':[('CÓD.',8),('AGÊNCIA',12),('FOMENTO',12),('PROJETOS',22),('VALOR TOTAL',17),('VIGÊNCIA',17),('AÇÕES',12)],
- 'producoes':[('CÓD.',8),('TÍTULO',25),('PROJETO',23),('TIPO',17),('DIVULGAÇÃO',14),('ANO',7),('AÇÕES',12)],
+ 'producoes':[('CÓD.',6),('TÍTULO',20),('PROJETO',17),('AUTORES',22),('TIPO',13),('DIVULGAÇÃO',12),('ANO',7),('AÇÕES',12)],
  'vinculos':[('PROJETO',31),('CPF',16),('PARTICIPANTE',24),('FUNÇÃO',16),('VIGÊNCIA',17),('AÇÕES',12)],
  'alocacoes':[('PROJETO',38),('FINANCIAMENTO',27),('VALOR DESTINADO',23),('AÇÕES',12)]}

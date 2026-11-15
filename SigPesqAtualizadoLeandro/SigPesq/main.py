@@ -261,7 +261,7 @@ class App(ctk.CTk):
         if m=='financiamentos':
             return [texto(r['codigo_financiamento']),self.texto('agencia_financiadora',r['agencia_financiadora']),texto(self.texto('tipo_fomento',r['tipo_fomento'])),texto(r.get('projetos_apoiados') or 'Sem destinação'),texto(formatar(r['valor_total']),True),vigencia()]
         if m=='producoes':
-            return [texto(r['codigo_prod']),texto(r['titulo'],True),texto(projeto()),texto(self.texto('tipo_prod',r['tipo_prod'])),texto(self.texto('meio_divulgacao',r['meio_divulgacao'])),texto(r['ano_publicacao'])]
+            return [texto(r['codigo_prod']),texto(r['titulo'],True),texto(projeto()),texto(r.get('nomes_autores') or 'Autoria pendente de definição'),texto(self.texto('tipo_prod',r['tipo_prod'])),texto(self.texto('meio_divulgacao',r['meio_divulgacao'])),texto(r['ano_publicacao'])]
         if m=='vinculos':
             nome=dict(self.opcoes['participante']).get(r['cpf'],r['cpf']).rsplit(' · ',1)[0]
             return [texto(projeto()),texto(r['cpf']),texto(nome,True),self.texto('funcao_desempenhada',r['funcao_desempenhada']),vigencia()]
@@ -343,6 +343,9 @@ class App(ctk.CTk):
             w=label(area,self.texto(c.nome,r.get(c.nome)),size=14,color=TITULO,anchor='w',justify='left',wraplength=550)
             w.pack(fill='x',padx=12)
             area.bind('<Configure>',lambda e,w=w:w.configure(wraplength=max(150,e.width-36)),add='+')
+        if self.modulo=='producoes':
+            label(area,'AUTORES',size=11,bold=True,color=MUTED).pack(anchor='w',padx=12,pady=(14,2))
+            label(area,r.get('nomes_autores') or 'Autoria pendente de definição.',size=14,anchor='w',justify='left',wraplength=550).pack(fill='x',padx=12)
         botao(win,'Fechar',self.fechar_modal,kind='secondary').pack(anchor='e',padx=24,pady=(0,20))
 
     def apagar(self,r=None):
@@ -403,6 +406,26 @@ class App(ctk.CTk):
                 aplicar_mascara(w,c.tipo)
             w.pack(fill='x',padx=12); widgets[c.nome]=w
             if registro and (c.nome in m['pk'] or (c.nome=='tipo_participante' and not self.sessao.admin)): w.configure(state='disabled')
+        autores_vars={}
+        if modulo=='producoes':
+            label(area,'AUTORES *',size=11,bold=True,anchor='w').pack(fill='x',padx=12,pady=(14,6))
+            label(area,'Selecione os participantes do projeto que assinam esta produção.',size=11,wraplength=520,justify='left').pack(fill='x',padx=12)
+            autores_area=ctk.CTkFrame(area,fg_color='transparent')
+            autores_area.pack(fill='x',padx=12,pady=8)
+            def atualizar_autores(valor=None):
+                selecionados={cpf for cpf,var in autores_vars.items() if var.get()}
+                if valor is None and registro: selecionados.update(registro.get('autores',[]))
+                autores_vars.clear()
+                for w in autores_area.winfo_children(): w.destroy()
+                projeto=maps['codigo_projeto'].get(widgets['codigo_projeto'].get())
+                equipe=self.opcoes.get('autores_por_projeto',{}).get(projeto,[])
+                if not equipe:
+                    label(autores_area,'Selecione um projeto com participantes vinculados para definir os autores.',size=12,wraplength=500,justify='left').pack(fill='x')
+                for cpf,nome in equipe:
+                    var=tk.BooleanVar(value=cpf in selecionados); autores_vars[cpf]=var
+                    ctk.CTkCheckBox(autores_area,text=nome,variable=var,font=fonte(12)).pack(anchor='w',pady=6)
+            widgets['codigo_projeto'].configure(command=atualizar_autores)
+            atualizar_autores()
         if modulo=='projetos':
             aviso=label(area,'',size=11,color=MUTED,anchor='w')
             aviso.pack(fill='x',padx=12,pady=(6,0))
@@ -416,6 +439,7 @@ class App(ctk.CTk):
             for c in m['campos']:
                 w=widgets[c.nome]; v=w.get('1.0','end-1c') if c.tipo=='multilinha' else w.get()
                 dados[c.nome]=maps[c.nome].get(v) if c.nome in maps else v
+            if modulo=='producoes': dados['autores']=[cpf for cpf,var in autores_vars.items() if var.get()]
             chave=tuple(registro[k] for k in m['pk']) if registro else None
             def pronto(_):
                 self.fechar_modal()

@@ -1,3 +1,4 @@
+DROP DATABASE sigpesq;
 CREATE DATABASE IF NOT EXISTS sigpesq
     CHARACTER SET utf8mb4
     COLLATE utf8mb4_unicode_ci;
@@ -67,6 +68,21 @@ CREATE TABLE vinculo_projeto_participante (
         ON UPDATE CASCADE
 );
 
+CREATE TABLE autoria_producao (
+    codigo_projeto INT UNSIGNED,
+    codigo_prod INT UNSIGNED,
+    cpf CHAR(11),
+    PRIMARY KEY (codigo_projeto, codigo_prod, cpf),
+    FOREIGN KEY (codigo_projeto, codigo_prod)
+        REFERENCES producao_cientifica (codigo_projeto, codigo_prod)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE,
+    FOREIGN KEY (codigo_projeto, cpf)
+        REFERENCES vinculo_projeto_participante (codigo_projeto, cpf)
+        ON DELETE RESTRICT
+        ON UPDATE CASCADE
+);
+
 CREATE TABLE vinculo_projeto_financiamento (
     codigo_projeto INT UNSIGNED,
     codigo_financiamento INT UNSIGNED,
@@ -82,4 +98,17 @@ CREATE TABLE vinculo_projeto_financiamento (
         REFERENCES financiamento (codigo_financiamento)
         ON DELETE CASCADE
         ON UPDATE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS autoria_producao (
+    codigo_projeto INT UNSIGNED,
+    codigo_prod INT UNSIGNED,
+    cpf CHAR(11),
+    PRIMARY KEY (codigo_projeto, codigo_prod, cpf),
+    FOREIGN KEY (codigo_projeto, codigo_prod)
+        REFERENCES producao_cientifica (codigo_projeto, codigo_prod)
+        ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (codigo_projeto, cpf)
+        REFERENCES vinculo_projeto_participante (codigo_projeto, cpf)
+        ON DELETE RESTRICT ON UPDATE CASCADE
 );

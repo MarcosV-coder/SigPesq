@@ -211,7 +211,10 @@ class App(ctk.CTk):
             rows,opcoes=repo.carregar(self.modulo,self.sessao)
             from db import transacao
             with transacao() as cur:
-                permitidos={p for p,_ in opcoes['projeto'] if repo.gestao(cur,self.sessao,p)}
+                permitidos = {
+                    p for p, _ in opcoes['projeto']
+                    if repo.gestao(cur, self.sessao, p, modulo=self.modulo)
+                }
                 criar=repo.gestao(cur,self.sessao)
             return rows,opcoes,permitidos,criar
         def ok(r):

@@ -17,18 +17,36 @@ def identidade(cur,s):
     return rows[0]
 
 def ativo(v): return v['data_saida'] is None or v['data_saida']>=date.today()
-def gestao(cur,s,projeto=None):
-    a=identidade(cur,s)
-    if s.admin: return True
-    vs=linhas(cur,'SELECT * FROM vinculo_projeto_participante WHERE cpf=%s',(s.cpf,))
+def gestao(cur, s, projeto=None, *, modulo='projetos'):
+    participante = identidade(cur, s)
+    if s.admin:
+        return True
+    if participante['tipo_participante'] != 2:
+        return False
     if projeto is None:
-        return a['tipo_participante']==2
-    return any(v['codigo_projeto']==projeto and ativo(v) and (v['data_entrada'] is None or v['data_entrada']<=date.today()) and (a['tipo_participante']==3 or v['funcao_desempenhada']==3) for v in vs)
+        return True
+    if modulo not in ('projetos', 'vinculos', 'producoes', 'alocacoes'):
+        return False
+    vinculos = linhas(
+        cur, 'SELECT * FROM vinculo_projeto_participante WHERE cpf=%s AND codigo_projeto=%s',
+        (s.cpf, projeto),
+    )
+    hoje = date.today()
+    return any(
+        ativo(vinculo)
+        and (vinculo['data_entrada'] is None or vinculo['data_entrada'] <= hoje)
+        and vinculo['funcao_desempenhada'] == 3
+        for vinculo in vinculos
+    )
 
-def exigir(cur,s,projeto=None):
-    if not gestao(cur,s,projeto):
-        if projeto is None: raise ValueError('Somente docentes ou o administrador podem cadastrar projetos.')
-        raise ValueError('Apenas coordenadores ou técnicos vinculados e ativos podem alterar este projeto.')
+def exigir(cur, s, projeto=None, *, modulo='projetos'):
+    if gestao(cur, s, projeto, modulo=modulo):
+        return
+    if projeto is None:
+        raise ValueError('Somente docentes ou o administrador podem cadastrar projetos.')
+    if modulo == 'projetos':
+        raise ValueError('Somente o administrador ou um docente com vínculo ativo de coordenador pode editar o projeto.')
+    raise ValueError('Somente o administrador ou um docente com vínculo ativo de coordenador pode gerenciar estes registros.')
 
 def carregar(modulo,s):
     m=MODELOS[modulo]
@@ -103,7 +121,9 @@ def salvar(modulo,dados,s=None,chave=None,cadastro=False):
                         if d['tipo_participante']!=atual['tipo_participante']: raise ValueError('Somente o administrador altera o tipo da conta.')
                 elif modulo=='financiamentos':
                     if not s.admin: raise ValueError('Somente o administrador gerencia contratos de financiamento.')
-                else: exigir(cur,s,None if modulo=='projetos' and chave is None else d['codigo_projeto'])
+                else:
+                    projeto = None if modulo == 'projetos' and chave is None else d['codigo_projeto']
+                    exigir(cur, s, projeto, modulo=modulo)
             where=' AND '.join(k+'=%s' for k in pk)
             existente=linhas(cur,f"SELECT {','.join(pk)} FROM {m['tabela']} WHERE {where}",key)
             if chave is None and existente: raise ValueError('Código, CPF ou vínculo já cadastrado.')
@@ -158,15 +178,32 @@ def salvar(modulo,dados,s=None,chave=None,cadastro=False):
             if chave is None:
                 cur.execute(f"INSERT INTO {m['tabela']} ({','.join(cols)}) VALUES ({','.join(['%s']*len(cols))})",tuple(d.values()))
                 if modulo=='projetos' and not s.admin:
-                    tipo=identidade(cur,s)['tipo_participante']
-                    cur.execute('INSERT INTO vinculo_projeto_participante (codigo_projeto,cpf,funcao_desempenhada,data_entrada) VALUES (%s,%s,%s,%s)',(d['codigo_projeto'],s.cpf,1 if tipo==3 else 3,d['data_inicio']))
+                    cur.execute(
+                        'INSERT INTO vinculo_projeto_participante '
+                        '(codigo_projeto,cpf,funcao_desempenhada,data_entrada) VALUES (%s,%s,%s,%s)',
+                        (d['codigo_projeto'], s.cpf, 3, d['data_inicio']),
+                    )
             else:
                 cols=[c for c in cols if c not in pk]
                 cur.execute(f"UPDATE {m['tabela']} SET {','.join(c+'=%s' for c in cols)} WHERE {where}",tuple(d[c] for c in cols)+key)
-            if modulo=='producoes':
-                cur.execute('DELETE FROM autoria_producao WHERE codigo_projeto=%s AND codigo_prod=%s',key)
+            if modulo == 'producoes':
+                atuais = {
+                    registro['cpf'] for registro in linhas(
+                        cur, 'SELECT cpf FROM autoria_producao WHERE codigo_projeto=%s AND codigo_prod=%s', key,
+                    )
+                }
+                # Registra os novos autores antes de remover os antigos.
                 for cpf in autores:
-                    cur.execute('INSERT INTO autoria_producao (codigo_projeto,codigo_prod,cpf) VALUES (%s,%s,%s)',key+(cpf,))
+                    if cpf not in atuais:
+                        cur.execute(
+                            'INSERT INTO autoria_producao (codigo_projeto,codigo_prod,cpf) VALUES (%s,%s,%s)',
+                            key + (cpf,),
+                        )
+                for cpf in atuais.difference(autores):
+                    cur.execute(
+                        'DELETE FROM autoria_producao WHERE codigo_projeto=%s AND codigo_prod=%s AND cpf=%s',
+                        key + (cpf,),
+                    )
             # Libera somente após commit, evitando corrida na verificação de e-mail.
             cur.execute('COMMIT')
         except Exception:

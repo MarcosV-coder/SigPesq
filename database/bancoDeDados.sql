@@ -96,12 +96,8 @@ CREATE TABLE vinculo_projeto_financiamento (
     valor_destinado DECIMAL(20,2) NOT NULL,
 
     excluido_em DATETIME NULL,
-    destinacao_ativa TINYINT GENERATED ALWAYS AS (CASE WHEN excluido_em IS NULL THEN 1 END) STORED,
 
     PRIMARY KEY (codigo_projeto, codigo_financiamento),
-
-    CONSTRAINT uq_destinacao_ativa_por_projeto
-        UNIQUE (codigo_projeto, destinacao_ativa),
 
     FOREIGN KEY (codigo_projeto)
         REFERENCES projeto (codigo_projeto)

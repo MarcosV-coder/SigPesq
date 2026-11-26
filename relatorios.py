@@ -7,6 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
+import tkinter as tk
 from tkinter import filedialog, messagebox
 from unicodedata import combining, normalize
 from xml.sax.saxutils import escape
@@ -543,16 +544,38 @@ class AbaRelatorios:
         self.desenhar_tabela(relatorio.detalhes, relatorio.detalhes.linhas[inicio:fim])
 
     def desenhar_tabela(self, tabela, registros):
-        grade = ctk.CTkFrame(self.previa, fg_color='transparent')
+        grade = tk.Frame(self.previa, bg=BRANCO, borderwidth=0, highlightthickness=0)
         grade.pack(fill='x', pady=(0, 6))
+        celulas = [[] for _ in tabela.colunas]
         for coluna, peso in enumerate(tabela.pesos):
             grade.columnconfigure(coluna, weight=peso, uniform='coluna')
         for indice, linha in enumerate((tabela.colunas, *registros)):
             for coluna, valor in enumerate(linha):
-                cell = label(grade, valor, size=11, bold=indice == 0, anchor='w', justify='left',
-                             fg_color=CLARO if indice % 2 == 0 else BRANCO, padx=7, pady=6, wraplength=65)
-                cell.grid(row=indice, column=coluna, sticky='nsew', padx=1, pady=1)
-                cell.bind('<Configure>', lambda event, w=cell: w.configure(wraplength=max(28, event.width - 17)))
+                celula = tk.Label(
+                    grade, text=valor, font=fonte(11, indice == 0), fg=TITULO,
+                    bg=CLARO if indice % 2 == 0 else BRANCO,
+                    anchor='w', justify='left', padx=7, pady=6,
+                    width=1, borderwidth=0, highlightthickness=0,
+                )
+                celula.grid(row=indice, column=coluna, sticky='nsew', padx=1, pady=1)
+                celulas[coluna].append(celula)
+
+        peso_total = sum(tabela.pesos)
+        largura_anterior = None
+
+        def ajustar_quebra(evento):
+            nonlocal largura_anterior
+            largura = evento.width
+            if largura <= 1 or largura == largura_anterior:
+                return
+            largura_anterior = largura
+            for peso, coluna in zip(tabela.pesos, celulas):
+                comprimento = max(1, largura * peso // peso_total - 18)
+                for celula in coluna:
+                    celula.configure(wraplength=comprimento)
+
+        # A largura da tabela determina a quebra. A quebra só afeta a altura das linhas.
+        grade.bind('<Configure>', ajustar_quebra)
 
     def baixar(self):
         if self.relatorio is None or self.app.pendente:

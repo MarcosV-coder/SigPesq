@@ -3,7 +3,7 @@ from datetime import date
 from db import transacao
 from modelos import MODELOS
 from validacao import validar
-from seguranca import gerar_hash
+from seguranca import ADMIN_LOGIN, autenticar, gerar_hash
 
 
 CODIGOS_CATEGORIA = {
@@ -71,11 +71,17 @@ def carregar(modulo,s):
         cols=[c.nome for c in m['campos'] if c.nome!='senha']
         rows=linhas(cur,f"SELECT {','.join(cols)} FROM {m['tabela']} WHERE excluido_em IS NULL")
         projetos=linhas(cur,'SELECT codigo_projeto,titulo FROM projeto WHERE excluido_em IS NULL')
+        participantes = linhas(cur, """
+            SELECT cpf, nome, tipo_participante FROM participante
+            WHERE excluido_em IS NULL ORDER BY nome, cpf
+        """)
         opcoes={'projeto':[(r['codigo_projeto'],f"{r['codigo_projeto']} · {r['titulo']}") for r in projetos],
-                'participante':[(r['cpf'],r['nome']) for r in linhas(cur,'SELECT cpf,nome FROM participante WHERE excluido_em IS NULL ORDER BY nome,cpf')],
+                'participante':[(r['cpf'],r['nome']) for r in participantes],
                 'financiamento':[(r['codigo_financiamento'],str(r['codigo_financiamento'])) for r in linhas(cur,'SELECT codigo_financiamento FROM financiamento WHERE excluido_em IS NULL')]}
         # Dados derivados para a consulta visual; nenhuma coluna nova no banco.
-        nomes=dict(opcoes['participante'])
+        docentes = {p['cpf']: p['nome'] for p in participantes if p['tipo_participante'] == 2}
+        if modulo == 'projetos' and s.admin:
+            opcoes['coordenador'] = list(docentes.items())
         titulos={p['codigo_projeto']:p['titulo'] for p in projetos}
         if modulo in ('projetos','participantes'):
             vinculos=linhas(cur,'SELECT codigo_projeto,cpf,funcao_desempenhada FROM vinculo_projeto_participante WHERE excluido_em IS NULL')
@@ -83,7 +89,11 @@ def carregar(modulo,s):
             funcoes=dict(FUNCOES)
             for r in rows:
                 if modulo=='projetos':
-                    r['coordenacao']=', '.join(nomes.get(v['cpf'],'Participante indisponível') for v in vinculos if v['codigo_projeto']==r['codigo_projeto'] and v['funcao_desempenhada']==3)
+                    r['coordenacao'] = ', '.join(
+                        docentes[v['cpf']] for v in vinculos
+                        if v['codigo_projeto'] == r['codigo_projeto']
+                        and v['funcao_desempenhada'] == 3 and v['cpf'] in docentes
+                    )
                 else:
                     r['equipes']='; '.join(titulos[v['codigo_projeto']]+' / '+funcoes.get(v['funcao_desempenhada'],'Sem função') for v in vinculos if v['cpf']==r['cpf'] and v['codigo_projeto'] in titulos)
         if modulo=='financiamentos':
@@ -120,9 +130,28 @@ def _validar(m,dados):
     if 'email' in d: d['email']=d['email'].lower()
     return d
 
-def salvar(modulo,dados,s=None,chave=None,cadastro=False):
+def _exigir_docente(cur, cpf):
+    if not linhas(cur, """
+        SELECT cpf FROM participante
+        WHERE cpf = %s AND tipo_participante = '2' AND excluido_em IS NULL
+    """, (cpf,)):
+        raise ValueError('Somente docentes podem exercer a função de coordenador.')
+
+
+def salvar(modulo, dados, s=None, chave=None, cadastro=False, *, senha_admin=None):
     m=MODELOS[modulo]; d=_validar(m,dados)
     autores=validar_autores(dados.get('autores')) if modulo=='producoes' else []
+    if modulo == 'projetos':
+        # A descrição é opcional, mas a coluna no banco não aceita NULL.
+        d['descricao'] = d['descricao'] or ''
+    if cadastro:
+        if modulo != 'participantes' or chave is not None:
+            raise ValueError('O cadastro inicial serve apenas para criar participantes.')
+        if d['tipo_participante'] != 1:
+            try:
+                autenticar(ADMIN_LOGIN, senha_admin or '')
+            except ValueError as erro:
+                raise ValueError('Docentes e técnicos precisam da autorização do administrador.') from erro
     pk=m['pk']; key=tuple(d[k] for k in pk)
     if chave is not None and key!=tuple(chave): raise ValueError('A chave do registro não pode ser alterada.')
     with transacao() as cur:
@@ -131,9 +160,8 @@ def salvar(modulo,dados,s=None,chave=None,cadastro=False):
         cur.execute("SELECT GET_LOCK('sigpesq_escrita',10) AS ok")
         if cur.fetchone()['ok']!=1: raise ValueError('Banco ocupado. Tente novamente.')
         try:
-            if cadastro:
-                if modulo!='participantes' or chave is not None or d['tipo_participante']!=1: raise ValueError('Cadastro opcional cria somente conta discente. Docentes e técnicos são definidos pelo administrador.')
-            else:
+            coordenador = None
+            if not cadastro:
                 identidade(cur,s)
                 if modulo=='participantes':
                     if not s.admin:
@@ -145,6 +173,10 @@ def salvar(modulo,dados,s=None,chave=None,cadastro=False):
                 else:
                     projeto = None if modulo == 'projetos' and chave is None else d['codigo_projeto']
                     exigir(cur, s, projeto, modulo=modulo)
+                    if modulo == 'projetos' and chave is None:
+                        coordenador = dados.get('coordenador') if s.admin else s.cpf
+                        if coordenador:
+                            _exigir_docente(cur, coordenador)
             where=' AND '.join(k+'=%s' for k in pk)
             existentes = linhas(cur, f"SELECT excluido_em FROM {m['tabela']} WHERE {where}", key)
             oculto = bool(existentes and existentes[0]['excluido_em'] is not None)
@@ -156,9 +188,15 @@ def salvar(modulo,dados,s=None,chave=None,cadastro=False):
             if chave is not None and (not existentes or oculto):
                 raise ValueError('Registro indisponível.')
             if modulo=='participantes':
-                from seguranca import ADMIN_LOGIN
-                admin_login=ADMIN_LOGIN
-                if d['email']==admin_login or d['cpf']==admin_login: raise ValueError('Login reservado ao administrador.')
+                if d['email']==ADMIN_LOGIN or d['cpf']==ADMIN_LOGIN: raise ValueError('Login reservado ao administrador.')
+                if chave is not None and d['tipo_participante'] != 2 and linhas(cur, """
+                    SELECT v.codigo_projeto FROM vinculo_projeto_participante v
+                    JOIN participante p ON p.cpf = v.cpf
+                    WHERE v.cpf = %s AND v.funcao_desempenhada = '3'
+                      AND v.excluido_em IS NULL AND p.tipo_participante <> %s
+                    LIMIT 1
+                """, (d['cpf'], str(d['tipo_participante']))):
+                    raise ValueError('Altere a função de coordenador na equipe antes de mudar o tipo do participante.')
                 if linhas(cur,'SELECT cpf FROM participante WHERE LOWER(email)=%s AND cpf<>%s',(d['email'],d['cpf'])): raise ValueError('E-mail já cadastrado.')
                 if d['senha']: d['senha']=gerar_hash(d['senha'])
                 elif chave is None: raise ValueError('Informe uma senha de 8 a 128 caracteres.')
@@ -202,6 +240,7 @@ def salvar(modulo,dados,s=None,chave=None,cadastro=False):
                 modulo == 'vinculos'
                 and d['funcao_desempenhada'] == 3
             ):
+                _exigir_docente(cur, d['cpf'])
                 coordenadores = linhas(
                     cur,
                     '''
@@ -233,11 +272,11 @@ def salvar(modulo,dados,s=None,chave=None,cadastro=False):
                     f"INSERT INTO {m['tabela']} ({','.join(cols)}) VALUES ({placeholders})",
                     tuple(valores_sql.values()),
                 )
-                if modulo=='projetos' and not s.admin:
+                if coordenador:
                     cur.execute(
                         'INSERT INTO vinculo_projeto_participante '
                         '(codigo_projeto,cpf,funcao_desempenhada,data_entrada) VALUES (%s,%s,%s,%s)',
-                        (d['codigo_projeto'], s.cpf, '3', d['data_inicio']),
+                        (d['codigo_projeto'], coordenador, '3', d['data_inicio']),
                     )
             else:
                 cols = [campo for campo in cols if campo not in pk]
@@ -271,6 +310,36 @@ def salvar(modulo,dados,s=None,chave=None,cadastro=False):
             cur.execute("SELECT RELEASE_LOCK('sigpesq_escrita')")
             cur.fetchall()
 
+def _impedir_exclusao_com_contrato_ativo(cur, modulo, chave):
+    origem = 'financiamento f'
+    if modulo == 'financiamentos':
+        filtro = 'f.codigo_financiamento = %s'
+    elif modulo in ('projetos', 'alocacoes'):
+        origem += """
+            JOIN vinculo_projeto_financiamento v
+              ON v.codigo_financiamento = f.codigo_financiamento
+        """
+        filtro = 'v.codigo_projeto = %s AND v.excluido_em IS NULL'
+        if modulo == 'alocacoes':
+            filtro += ' AND v.codigo_financiamento = %s'
+    else:
+        return
+
+    contratos = linhas(cur, f"""
+        SELECT f.codigo_financiamento
+        FROM {origem}
+        WHERE {filtro} AND f.excluido_em IS NULL
+          AND %s BETWEEN f.data_inicio AND f.data_termino
+        ORDER BY f.codigo_financiamento
+        LIMIT 1
+    """, (*chave, date.today()))
+    if contratos:
+        codigo = contratos[0]['codigo_financiamento']
+        if modulo == 'projetos':
+            raise ValueError(f'O projeto está vinculado ao contrato de financiamento ativo {codigo}.')
+        raise ValueError(f'O contrato de financiamento {codigo} está ativo. A exclusão só é permitida fora da vigência.')
+
+
 def excluir(modulo, chave, s):
     if not s or not s.admin:
         raise ValueError('Somente o administrador pode excluir registros.')
@@ -289,6 +358,7 @@ def excluir(modulo, chave, s):
         if cur.fetchone()['ok'] != 1:
             raise ValueError('Banco ocupado.')
         try:
+            _impedir_exclusao_com_contrato_ativo(cur, modulo, chave)
             where = ' AND '.join(f'{coluna}=%s' for coluna in modelo['pk'])
             cur.execute(
                 f"UPDATE {modelo['tabela']} SET excluido_em = CURRENT_TIMESTAMP "

@@ -9,7 +9,7 @@ from collections import Counter
 import unicodedata
 import customtkinter as ctk
 import repositorio as repo
-from modelos import MODELOS, TIPOS
+from modelos import MODELOS
 from seguranca import autenticar
 from validacao import formatar
 from mascaras import aplicar_mascara
@@ -440,7 +440,6 @@ class App(ctk.CTk):
                 w=ctk.CTkTextbox(area,height=100,fg_color=CLARO,border_width=0,text_color=TITULO,font=fonte(13),wrap='word'); w.insert('1.0',value or '')
             elif c.opcoes or c.tipo in ('projeto','participante','financiamento'):
                 options=self.opcoes_participantes() if c.tipo=='participante' else list(c.opcoes or self.opcoes.get(c.tipo,[]))
-                if cadastro and c.nome=='tipo_participante': options=list(TIPOS[:1])
                 if not cadastro and c.nome=='codigo_projeto' and not self.sessao.admin and not registro: options=[(k,v) for k,v in options if k in self.permitidos]
                 maps[c.nome]={str(v):k for k,v in options}
                 w=ctk.CTkOptionMenu(area,values=['Selecione...']+list(maps[c.nome]),fg_color=CLARO,text_color=TITULO,
@@ -454,6 +453,37 @@ class App(ctk.CTk):
                 aplicar_mascara(w,c.tipo)
             w.pack(fill='x',padx=12); widgets[c.nome]=w
             if registro and (c.nome in m['pk'] or (c.nome=='tipo_participante' and not self.sessao.admin)): w.configure(state='disabled')
+        senha_admin = None
+        if cadastro:
+            bloco_autorizacao = ctk.CTkFrame(area, fg_color='transparent')
+            label(bloco_autorizacao, 'SENHA DO ADMINISTRADOR *', size=11, bold=True).pack(anchor='w')
+            senha_admin = ctk.CTkEntry(bloco_autorizacao, show='*', height=42, fg_color=CLARO)
+            senha_admin.pack(fill='x', pady=(6, 0))
+
+            def mostrar_autorizacao(perfil):
+                if perfil == 'Discente':
+                    senha_admin.delete(0, 'end')
+                    bloco_autorizacao.pack_forget()
+                else:
+                    bloco_autorizacao.pack(fill='x', padx=12, pady=(14, 0))
+
+            widgets['tipo_participante'].configure(command=mostrar_autorizacao)
+
+        seletor_coordenador = None
+        coordenadores = {}
+        if modulo == 'projetos' and registro is None and self.sessao.admin:
+            label(area, 'COORDENADOR (OPCIONAL)', size=11, bold=True).pack(anchor='w', padx=12, pady=(14, 6))
+            coordenadores = {
+                f'{nome} · {cpf}': cpf for cpf, nome in self.opcoes.get('coordenador', [])
+            }
+            seletor_coordenador = ctk.CTkOptionMenu(
+                area, values=['Definir depois', *coordenadores], dynamic_resizing=False, height=42,
+                fg_color=CLARO, text_color=TITULO, button_color=CLARO, button_hover_color='#dde7fc',
+            )
+            seletor_coordenador.pack(fill='x', padx=12)
+            label(area, 'Você também pode definir um docente como coordenador na aba Vínculos.',
+                  size=11, color=MUTED, wraplength=500, justify='left').pack(anchor='w', padx=12, pady=(4, 0))
+
         autores_vars={}
         if modulo=='producoes':
             label(area,'AUTORES *',size=11,bold=True,anchor='w').pack(fill='x',padx=12,pady=(14,6))
@@ -495,12 +525,18 @@ class App(ctk.CTk):
                 w=widgets[c.nome]; v=w.get('1.0','end-1c') if c.tipo=='multilinha' else w.get()
                 dados[c.nome]=maps[c.nome].get(v) if c.nome in maps else v
             if modulo=='producoes': dados['autores']=[cpf for cpf,var in autores_vars.items() if var.get()]
+            if seletor_coordenador is not None:
+                dados['coordenador'] = coordenadores.get(seletor_coordenador.get())
+            autorizacao = senha_admin.get() if senha_admin is not None else None
             chave=tuple(registro[k] for k in m['pk']) if registro else None
             def pronto(_):
                 self.fechar_modal()
                 if cadastro: messagebox.showinfo('Conta criada','Entre com seu e-mail ou CPF e sua senha. A equipe responsável poderá vinculá-lo a um projeto.',parent=self)
                 else: self.carregar()
-            self.tarefa(lambda:repo.salvar(modulo,dados,self.sessao,chave,cadastro),pronto)
+            self.tarefa(
+                lambda: repo.salvar(modulo, dados, self.sessao, chave, cadastro, senha_admin=autorizacao),
+                pronto,
+            )
         bottom=ctk.CTkFrame(win,fg_color='transparent'); bottom.pack(fill='x',padx=24,pady=(0,20))
         self.salvar_btn=botao(bottom,'Salvar alterações' if registro else 'Salvar cadastro',salvar,icon='save',height=42)
         self.salvar_btn.pack(side='right')

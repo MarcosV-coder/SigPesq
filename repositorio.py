@@ -5,15 +5,30 @@ from modelos import MODELOS
 from validacao import validar
 from seguranca import gerar_hash
 
-def linhas(cur,sql,params=()):
-    cur.execute(sql,params)
-    return cur.fetchall()
+
+CODIGOS_CATEGORIA = {
+    campo.nome: {str(codigo): codigo for codigo, _ in campo.opcoes}
+    for modelo in MODELOS.values()
+    for campo in modelo['campos']
+    if campo.tipo == 'opcao'
+}
+
+
+def linhas(cur, sql, params=()):
+    cur.execute(sql, params)
+    registros = cur.fetchall()
+    for registro in registros:
+        for campo in registro.keys() & CODIGOS_CATEGORIA.keys():
+            valor = registro[campo]
+            registro[campo] = CODIGOS_CATEGORIA[campo].get(valor, valor)
+    return registros
+
 
 def identidade(cur,s):
     if not s: raise ValueError('Faça login para continuar.')
     if s.admin: return None
-    rows=linhas(cur,'SELECT * FROM participante WHERE cpf=%s',(s.cpf,))
-    if len(rows)!=1: raise ValueError('Conta não encontrada. Entre novamente.')
+    rows=linhas(cur,'SELECT * FROM participante WHERE cpf=%s AND excluido_em IS NULL',(s.cpf,))
+    if len(rows)!=1: raise ValueError('Conta indisponível. Entre novamente.')
     return rows[0]
 
 def ativo(v): return v['data_saida'] is None or v['data_saida']>=date.today()
@@ -28,7 +43,7 @@ def gestao(cur, s, projeto=None, *, modulo='projetos'):
     if modulo not in ('projetos', 'vinculos', 'producoes', 'alocacoes'):
         return False
     vinculos = linhas(
-        cur, 'SELECT * FROM vinculo_projeto_participante WHERE cpf=%s AND codigo_projeto=%s',
+        cur, 'SELECT * FROM vinculo_projeto_participante WHERE cpf=%s AND codigo_projeto=%s AND excluido_em IS NULL',
         (s.cpf, projeto),
     )
     hoje = date.today()
@@ -54,16 +69,16 @@ def carregar(modulo,s):
         identidade(cur,s)
         # Senha nunca é enviada à interface.
         cols=[c.nome for c in m['campos'] if c.nome!='senha']
-        rows=linhas(cur,f"SELECT {','.join(cols)} FROM {m['tabela']}")
-        projetos=linhas(cur,'SELECT codigo_projeto,titulo FROM projeto')
+        rows=linhas(cur,f"SELECT {','.join(cols)} FROM {m['tabela']} WHERE excluido_em IS NULL")
+        projetos=linhas(cur,'SELECT codigo_projeto,titulo FROM projeto WHERE excluido_em IS NULL')
         opcoes={'projeto':[(r['codigo_projeto'],f"{r['codigo_projeto']} · {r['titulo']}") for r in projetos],
-                'participante':[(r['cpf'],r['nome']) for r in linhas(cur,'SELECT cpf,nome FROM participante ORDER BY nome,cpf')],
-                'financiamento':[(r['codigo_financiamento'],str(r['codigo_financiamento'])) for r in linhas(cur,'SELECT codigo_financiamento FROM financiamento')]}
+                'participante':[(r['cpf'],r['nome']) for r in linhas(cur,'SELECT cpf,nome FROM participante WHERE excluido_em IS NULL ORDER BY nome,cpf')],
+                'financiamento':[(r['codigo_financiamento'],str(r['codigo_financiamento'])) for r in linhas(cur,'SELECT codigo_financiamento FROM financiamento WHERE excluido_em IS NULL')]}
         # Dados derivados para a consulta visual; nenhuma coluna nova no banco.
         nomes=dict(opcoes['participante'])
         titulos={p['codigo_projeto']:p['titulo'] for p in projetos}
         if modulo in ('projetos','participantes'):
-            vinculos=linhas(cur,'SELECT codigo_projeto,cpf,funcao_desempenhada FROM vinculo_projeto_participante')
+            vinculos=linhas(cur,'SELECT codigo_projeto,cpf,funcao_desempenhada FROM vinculo_projeto_participante WHERE excluido_em IS NULL')
             from modelos import FUNCOES
             funcoes=dict(FUNCOES)
             for r in rows:
@@ -72,18 +87,24 @@ def carregar(modulo,s):
                 else:
                     r['equipes']='; '.join(titulos[v['codigo_projeto']]+' / '+funcoes.get(v['funcao_desempenhada'],'Sem função') for v in vinculos if v['cpf']==r['cpf'] and v['codigo_projeto'] in titulos)
         if modulo=='financiamentos':
-            destinos=linhas(cur,'SELECT codigo_projeto,codigo_financiamento FROM vinculo_projeto_financiamento')
+            destinos=linhas(cur,'SELECT codigo_projeto,codigo_financiamento FROM vinculo_projeto_financiamento WHERE excluido_em IS NULL')
             for r in rows:
                 r['projetos_apoiados']=', '.join(titulos[v['codigo_projeto']] for v in destinos if v['codigo_financiamento']==r['codigo_financiamento'] and v['codigo_projeto'] in titulos)
         if modulo=='producoes':
-            equipes=linhas(cur,'SELECT v.codigo_projeto,v.cpf,p.nome FROM vinculo_projeto_participante v JOIN participante p ON p.cpf=v.cpf ORDER BY p.nome,v.cpf')
+            equipes = linhas(cur, """
+                SELECT v.codigo_projeto, v.cpf, p.nome
+                FROM vinculo_projeto_participante v
+                JOIN participante p ON p.cpf = v.cpf
+                WHERE v.excluido_em IS NULL AND p.excluido_em IS NULL
+                ORDER BY p.nome, v.cpf
+            """)
             opcoes['autores_por_projeto']={}
             for v in equipes:
                 opcoes['autores_por_projeto'].setdefault(v['codigo_projeto'],[]).append((v['cpf'],v['nome']))
             autorias=linhas(cur,'SELECT a.codigo_projeto,a.codigo_prod,a.cpf,p.nome FROM autoria_producao a JOIN participante p ON p.cpf=a.cpf ORDER BY p.nome,a.cpf')
             for r in rows:
                 autores=[a for a in autorias if (a['codigo_projeto'],a['codigo_prod'])==(r['codigo_projeto'],r['codigo_prod'])]
-                r['autores']=[a['cpf'] for a in autores]
+                r['autores']=[(a['cpf'], a['nome']) for a in autores]
                 r['nomes_autores']='; '.join(a['nome'] for a in autores)
         return rows,opcoes
 
@@ -125,9 +146,15 @@ def salvar(modulo,dados,s=None,chave=None,cadastro=False):
                     projeto = None if modulo == 'projetos' and chave is None else d['codigo_projeto']
                     exigir(cur, s, projeto, modulo=modulo)
             where=' AND '.join(k+'=%s' for k in pk)
-            existente=linhas(cur,f"SELECT {','.join(pk)} FROM {m['tabela']} WHERE {where}",key)
-            if chave is None and existente: raise ValueError('Código, CPF ou vínculo já cadastrado.')
-            if chave is not None and not existente: raise ValueError('Registro não encontrado.')
+            existentes = linhas(cur, f"SELECT excluido_em FROM {m['tabela']} WHERE {where}", key)
+            oculto = bool(existentes and existentes[0]['excluido_em'] is not None)
+            reativar = chave is None and oculto and modulo in ('vinculos', 'alocacoes')
+            if chave is None and existentes and not reativar:
+                if modulo == 'participantes':
+                    raise ValueError('CPF já cadastrado.')
+                raise ValueError('Código ou vínculo já cadastrado.')
+            if chave is not None and (not existentes or oculto):
+                raise ValueError('Registro indisponível.')
             if modulo=='participantes':
                 from seguranca import ADMIN_LOGIN
                 admin_login=ADMIN_LOGIN
@@ -138,17 +165,37 @@ def salvar(modulo,dados,s=None,chave=None,cadastro=False):
                 else: del d['senha']
             for campo,tabela,col in [('codigo_projeto','projeto','codigo_projeto'),('cpf','participante','cpf'),('codigo_financiamento','financiamento','codigo_financiamento')]:
                 if campo in d and m['tabela']!=tabela:
-                    if not linhas(cur,f'SELECT {col} FROM {tabela} WHERE {col}=%s',(d[campo],)): raise ValueError('O registro relacionado não existe.')
-            if modulo=='producoes':
-                equipe={r['cpf'] for r in linhas(cur,'SELECT cpf FROM vinculo_projeto_participante WHERE codigo_projeto=%s',(d['codigo_projeto'],))}
-                if not set(autores)<=equipe:
-                    raise ValueError('Todos os autores devem estar vinculados ao projeto da produção.')
+                    if not linhas(cur,f'SELECT {col} FROM {tabela} WHERE {col}=%s AND excluido_em IS NULL',(d[campo],)): raise ValueError('O registro relacionado não existe.')
+            if modulo == 'producoes':
+                atuais = {
+                    r['cpf'] for r in linhas(
+                        cur, 'SELECT cpf FROM autoria_producao WHERE codigo_projeto=%s AND codigo_prod=%s', key,
+                    )
+                }
+                equipe = {
+                    r['cpf'] for r in linhas(cur, """
+                        SELECT v.cpf FROM vinculo_projeto_participante v
+                        JOIN participante p ON p.cpf = v.cpf
+                        WHERE v.codigo_projeto = %s
+                          AND v.excluido_em IS NULL AND p.excluido_em IS NULL
+                    """, (d['codigo_projeto'],))
+                }
+                if set(autores).difference(atuais, equipe):
+                    raise ValueError('Novos autores precisam ter um cadastro e um vínculo visíveis no projeto.')
             if modulo=='alocacoes':
+                outra_destinacao = linhas(cur, """
+                    SELECT codigo_financiamento
+                    FROM vinculo_projeto_financiamento
+                    WHERE codigo_projeto = %s AND codigo_financiamento <> %s
+                      AND excluido_em IS NULL
+                """, (d['codigo_projeto'], d['codigo_financiamento']))
+                if outra_destinacao:
+                    raise ValueError('O projeto já possui uma destinação de financiamento.')
                 contrato=linhas(cur,'SELECT valor_total FROM financiamento WHERE codigo_financiamento=%s',(d['codigo_financiamento'],))[0]
-                soma=sum(r['valor_destinado'] for r in linhas(cur,'SELECT valor_destinado FROM vinculo_projeto_financiamento WHERE codigo_financiamento=%s AND codigo_projeto<>%s',(d['codigo_financiamento'],d['codigo_projeto'])))
+                soma=sum(r['valor_destinado'] for r in linhas(cur,'SELECT valor_destinado FROM vinculo_projeto_financiamento WHERE codigo_financiamento=%s AND codigo_projeto<>%s AND excluido_em IS NULL',(d['codigo_financiamento'],d['codigo_projeto'])))
                 if soma+d['valor_destinado']>contrato['valor_total']: raise ValueError('Destinação excede o valor disponível do contrato.')
             if modulo=='financiamentos' and chave:
-                soma=sum(r['valor_destinado'] for r in linhas(cur,'SELECT valor_destinado FROM vinculo_projeto_financiamento WHERE codigo_financiamento=%s',key))
+                soma=sum(r['valor_destinado'] for r in linhas(cur,'SELECT valor_destinado FROM vinculo_projeto_financiamento WHERE codigo_financiamento=%s AND excluido_em IS NULL',key))
                 if soma>d['valor_total']: raise ValueError('Valor inferior ao total já destinado.')
 
             if (
@@ -161,7 +208,8 @@ def salvar(modulo,dados,s=None,chave=None,cadastro=False):
                     SELECT cpf
                     FROM vinculo_projeto_participante
                     WHERE codigo_projeto = %s
-                      AND funcao_desempenhada = 3
+                      AND funcao_desempenhada = '3'
+                      AND excluido_em IS NULL
                       AND cpf <> %s
                     ''',
                     (d['codigo_projeto'], d['cpf'])
@@ -174,25 +222,35 @@ def salvar(modulo,dados,s=None,chave=None,cadastro=False):
                         'de definir outro.'
                     )
                 
-            cols=list(d)
-            if chave is None:
-                cur.execute(f"INSERT INTO {m['tabela']} ({','.join(cols)}) VALUES ({','.join(['%s']*len(cols))})",tuple(d.values()))
+            valores_sql = {
+                campo: str(valor) if campo in CODIGOS_CATEGORIA else valor
+                for campo, valor in d.items()
+            }
+            cols = list(valores_sql)
+            if chave is None and not reativar:
+                placeholders = ','.join(['%s'] * len(cols))
+                cur.execute(
+                    f"INSERT INTO {m['tabela']} ({','.join(cols)}) VALUES ({placeholders})",
+                    tuple(valores_sql.values()),
+                )
                 if modulo=='projetos' and not s.admin:
                     cur.execute(
                         'INSERT INTO vinculo_projeto_participante '
                         '(codigo_projeto,cpf,funcao_desempenhada,data_entrada) VALUES (%s,%s,%s,%s)',
-                        (d['codigo_projeto'], s.cpf, 3, d['data_inicio']),
+                        (d['codigo_projeto'], s.cpf, '3', d['data_inicio']),
                     )
             else:
-                cols=[c for c in cols if c not in pk]
-                cur.execute(f"UPDATE {m['tabela']} SET {','.join(c+'=%s' for c in cols)} WHERE {where}",tuple(d[c] for c in cols)+key)
+                cols = [campo for campo in cols if campo not in pk]
+                atribuicoes = ','.join(f'{campo}=%s' for campo in cols)
+                if reativar:
+                    atribuicoes += ',excluido_em=NULL'
+                cur.execute(
+                    f"UPDATE {m['tabela']} SET {atribuicoes} WHERE {where}",
+                    tuple(valores_sql[campo] for campo in cols) + key,
+                )
             if modulo == 'producoes':
-                atuais = {
-                    registro['cpf'] for registro in linhas(
-                        cur, 'SELECT cpf FROM autoria_producao WHERE codigo_projeto=%s AND codigo_prod=%s', key,
-                    )
-                }
-                # Registra os novos autores antes de remover os antigos.
+                # A edição explícita da lista pode retirar uma assinatura.
+                # Ocultar cadastros ou vínculos preserva as autorias.
                 for cpf in autores:
                     if cpf not in atuais:
                         cur.execute(
@@ -213,32 +271,44 @@ def salvar(modulo,dados,s=None,chave=None,cadastro=False):
             cur.execute("SELECT RELEASE_LOCK('sigpesq_escrita')")
             cur.fetchall()
 
-def excluir(modulo,chave,s):
-    # Exclusão reservada ao administrador; remoções explícitas e proteção das autorias.
-    if not s or not s.admin: raise ValueError('Somente o administrador pode excluir registros.')
-    m=MODELOS[modulo]
+def excluir(modulo, chave, s):
+    if not s or not s.admin:
+        raise ValueError('Somente o administrador pode excluir registros.')
+    modelo = MODELOS[modulo]
+    dependentes = {
+        'projetos': (
+            ('producao_cientifica', 'codigo_projeto'),
+            ('vinculo_projeto_participante', 'codigo_projeto'),
+            ('vinculo_projeto_financiamento', 'codigo_projeto'),
+        ),
+        'participantes': (('vinculo_projeto_participante', 'cpf'),),
+        'financiamentos': (('vinculo_projeto_financiamento', 'codigo_financiamento'),),
+    }
     with transacao() as cur:
         cur.execute("SELECT GET_LOCK('sigpesq_escrita',10) AS ok")
-        if cur.fetchone()['ok']!=1: raise ValueError('Banco ocupado.')
+        if cur.fetchone()['ok'] != 1:
+            raise ValueError('Banco ocupado.')
         try:
-            if modulo=='vinculos' and linhas(cur,'SELECT cpf FROM autoria_producao WHERE codigo_projeto=%s AND cpf=%s',chave):
-                raise ValueError('Este participante é autor de produções do projeto. Edite os autores antes de remover o vínculo.')
-            if modulo=='participantes' and linhas(cur,'SELECT cpf FROM autoria_producao WHERE cpf=%s',chave):
-                raise ValueError('Este participante é autor de produções. Edite os autores antes de excluir sua conta.')
-            if modulo=='projetos':
-                # Remove autorias antes dos vínculos protegidos por RESTRICT.
-                cur.execute('DELETE FROM autoria_producao WHERE codigo_projeto=%s',chave)
-                for t in ('producao_cientifica','vinculo_projeto_participante','vinculo_projeto_financiamento'):
-                    cur.execute(f'DELETE FROM {t} WHERE codigo_projeto=%s',chave)
-            if modulo=='participantes': cur.execute('DELETE FROM vinculo_projeto_participante WHERE cpf=%s',chave)
-            if modulo=='financiamentos': cur.execute('DELETE FROM vinculo_projeto_financiamento WHERE codigo_financiamento=%s',chave)
-            cur.execute(f"DELETE FROM {m['tabela']} WHERE "+' AND '.join(k+'=%s' for k in m['pk']),chave)
-            if not cur.rowcount: raise ValueError('Registro não encontrado.')
+            where = ' AND '.join(f'{coluna}=%s' for coluna in modelo['pk'])
+            cur.execute(
+                f"UPDATE {modelo['tabela']} SET excluido_em = CURRENT_TIMESTAMP "
+                f"WHERE {where} AND excluido_em IS NULL",
+                chave,
+            )
+            if cur.rowcount:
+                for tabela, coluna in dependentes.get(modulo, ()):
+                    cur.execute(
+                        f"UPDATE {tabela} SET excluido_em = CURRENT_TIMESTAMP "
+                        f"WHERE {coluna} = %s AND excluido_em IS NULL",
+                        chave,
+                    )
             cur.execute('COMMIT')
         except Exception:
-            cur.execute('ROLLBACK'); raise
+            cur.execute('ROLLBACK')
+            raise
         finally:
-            cur.execute("SELECT RELEASE_LOCK('sigpesq_escrita')"); cur.fetchall()
+            cur.execute("SELECT RELEASE_LOCK('sigpesq_escrita')")
+            cur.fetchall()
 
 
 def validar_autores(valores):

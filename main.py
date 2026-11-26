@@ -397,7 +397,7 @@ class App(ctk.CTk):
         if self.pendente or self.modal: return
         r=r or self.selecionado()
         if not r: return
-        if messagebox.askyesno('Excluir registro','Excluir este registro e seus vínculos relacionados? Esta ação não pode ser desfeita.',parent=self):
+        if messagebox.askyesno('Excluir registro','Ocultar este registro e os registros que dependem dele nas consultas do sistema?',parent=self):
             chave=tuple(r[k] for k in MODELOS[self.modulo]['pk'])
             self.tarefa(lambda:repo.excluir(self.modulo,chave,self.sessao),lambda _:self.carregar())
 
@@ -462,14 +462,18 @@ class App(ctk.CTk):
             autores_area.pack(fill='x',padx=12,pady=8)
             def atualizar_autores(valor=None):
                 selecionados={cpf for cpf,var in autores_vars.items() if var.get()}
-                if valor is None and registro: selecionados.update(registro.get('autores',[]))
+                autores_salvos = dict(registro['autores']) if registro else {}
+                if valor is None:
+                    selecionados.update(autores_salvos)
                 autores_vars.clear()
                 for w in autores_area.winfo_children(): w.destroy()
                 projeto=maps['codigo_projeto'].get(widgets['codigo_projeto'].get())
-                equipe=self.opcoes.get('autores_por_projeto',{}).get(projeto,[])
+                equipe = dict(self.opcoes.get('autores_por_projeto', {}).get(projeto, []))
+                for cpf, nome in autores_salvos.items():
+                    equipe.setdefault(cpf, f'{nome} (vínculo oculto)')
                 if not equipe:
                     label(autores_area,'Selecione um projeto com participantes vinculados para definir os autores.',size=12,wraplength=500,justify='left').pack(fill='x')
-                for cpf,nome in equipe:
+                for cpf,nome in equipe.items():
                     var=tk.BooleanVar(value=cpf in selecionados); autores_vars[cpf]=var
                     ctk.CTkCheckBox(autores_area,text=nome,variable=var,font=fonte(12)).pack(anchor='w',pady=6)
             widgets['codigo_projeto'].configure(command=atualizar_autores)

@@ -9,35 +9,39 @@ CREATE TABLE projeto (
     codigo_projeto INT UNSIGNED PRIMARY KEY,
     titulo VARCHAR(100) NOT NULL,
     descricao VARCHAR(300) NOT NULL,
-    situacao INT NOT NULL,
+    situacao CHAR(1) NOT NULL,
     data_inicio DATE NOT NULL,
-    data_termino DATE
+    data_termino DATE,
+    excluido_em DATETIME NULL
 );
 
 CREATE TABLE participante (
     cpf CHAR(11) PRIMARY KEY,
     nome VARCHAR(100) NOT NULL,
     email VARCHAR(100) NOT NULL,
-    tipo_participante INT NOT NULL,
-    senha VARCHAR(255) NOT NULL
+    tipo_participante CHAR(1) NOT NULL,
+    senha VARCHAR(255) NOT NULL,
+    excluido_em DATETIME NULL
 );
 
 CREATE TABLE financiamento (
     codigo_financiamento INT UNSIGNED PRIMARY KEY,
-    agencia_financiadora INT NOT NULL,
-    tipo_fomento INT NOT NULL,
+    agencia_financiadora CHAR(1) NOT NULL,
+    tipo_fomento CHAR(1) NOT NULL,
     valor_total DECIMAL(20,2) NOT NULL,
     data_inicio DATE NOT NULL,
-    data_termino DATE NOT NULL
+    data_termino DATE NOT NULL,
+    excluido_em DATETIME NULL
 );
 
 CREATE TABLE producao_cientifica (
     codigo_projeto INT UNSIGNED NOT NULL,
     codigo_prod INT UNSIGNED NOT NULL,
     titulo VARCHAR(100) NOT NULL,
-    tipo_prod INT NOT NULL,
-    meio_divulgacao INT NOT NULL,
+    tipo_prod CHAR(1) NOT NULL,
+    meio_divulgacao CHAR(1) NOT NULL,
     ano_publicacao INT UNSIGNED NOT NULL,
+    excluido_em DATETIME NULL,
 
     PRIMARY KEY (codigo_projeto, codigo_prod),
 
@@ -50,9 +54,10 @@ CREATE TABLE producao_cientifica (
 CREATE TABLE vinculo_projeto_participante (
     codigo_projeto INT UNSIGNED NOT NULL,
     cpf CHAR(11) NOT NULL,
-    funcao_desempenhada INT NOT NULL,
+    funcao_desempenhada CHAR(1) NOT NULL,
     data_entrada DATE NOT NULL,
     data_saida DATE,
+    excluido_em DATETIME NULL,
 
     PRIMARY KEY (codigo_projeto, cpf),
 
@@ -90,10 +95,13 @@ CREATE TABLE vinculo_projeto_financiamento (
     codigo_financiamento INT UNSIGNED,
     valor_destinado DECIMAL(20,2) NOT NULL,
 
+    excluido_em DATETIME NULL,
+    destinacao_ativa TINYINT GENERATED ALWAYS AS (CASE WHEN excluido_em IS NULL THEN 1 END) STORED,
+
     PRIMARY KEY (codigo_projeto, codigo_financiamento),
 
-    CONSTRAINT uq_financiamento_por_projeto
-        UNIQUE (codigo_projeto),
+    CONSTRAINT uq_destinacao_ativa_por_projeto
+        UNIQUE (codigo_projeto, destinacao_ativa),
 
     FOREIGN KEY (codigo_projeto)
         REFERENCES projeto (codigo_projeto)

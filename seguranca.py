@@ -32,7 +32,7 @@ def autenticar(login,senha):
         if conferir(senha,ADMIN_HASH): return Sessao(None,'Administrador geral',True)
     else:
         with transacao() as cur:
-            cur.execute('SELECT cpf,nome,senha FROM participante WHERE LOWER(email)=%s OR cpf=%s',(login,login))
+            cur.execute('SELECT cpf,nome,senha FROM participante WHERE excluido_em IS NULL AND (LOWER(email)=%s OR cpf=%s)',(login,login))
             rows=cur.fetchall()
             if len(rows)==1 and conferir(senha,rows[0]['senha']): return Sessao(rows[0]['cpf'],rows[0]['nome'])
     raise ValueError('Login ou senha inválidos.')

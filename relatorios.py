@@ -79,9 +79,9 @@ OPCOES_FIXAS = {
 def opcoes_relatorios(sessao):
     with transacao() as cur:
         identidade(cur, sessao)
-        projetos = linhas(cur, 'SELECT codigo_projeto, titulo FROM projeto ORDER BY titulo, codigo_projeto')
-        docentes = linhas(cur, 'SELECT cpf, nome FROM participante WHERE tipo_participante = 2 ORDER BY nome, cpf')
-        anos = linhas(cur, 'SELECT DISTINCT ano_publicacao FROM producao_cientifica ORDER BY ano_publicacao DESC')
+        projetos = linhas(cur, 'SELECT codigo_projeto, titulo FROM projeto WHERE excluido_em IS NULL ORDER BY titulo, codigo_projeto')
+        docentes = linhas(cur, "SELECT cpf, nome FROM participante WHERE tipo_participante = '2' AND excluido_em IS NULL ORDER BY nome, cpf")
+        anos = linhas(cur, 'SELECT DISTINCT ano_publicacao FROM producao_cientifica WHERE excluido_em IS NULL ORDER BY ano_publicacao DESC')
 
     # Distingue homônimos no seletor e mantém seu identificador apenas no mapa interno.
     totais = Counter(d['nome'] for d in docentes)
@@ -101,9 +101,14 @@ def opcoes_relatorios(sessao):
     }
 
 
-def _buscar(cur, base, clausulas, filtros, ordem):
-    selecionadas = [(clausula, filtros[chave]) for chave, clausula in clausulas if filtros.get(chave) is not None]
-    where = ' WHERE ' + ' AND '.join(c for c, _ in selecionadas) if selecionadas else ''
+def _buscar(cur, base, clausulas, filtros, ordem, *, visibilidade):
+    selecionadas = [
+        (clausula, str(filtros[chave]) if chave in OPCOES_FIXAS else filtros[chave])
+        for chave, clausula in clausulas
+        if filtros.get(chave) is not None
+    ]
+    condicoes = [visibilidade, *(clausula for clausula, _ in selecionadas)]
+    where = ' WHERE ' + ' AND '.join(condicoes)
     return linhas(cur, base + where + ' ORDER BY ' + ordem, tuple(valor for _, valor in selecionadas))
 
 
@@ -124,10 +129,12 @@ def _projetos(cur, filtros):
             SELECT v.codigo_projeto, d.cpf, d.nome
             FROM vinculo_projeto_participante v
             JOIN participante d ON d.cpf = v.cpf
-            WHERE v.funcao_desempenhada = 3 AND d.tipo_participante = 2
+            WHERE v.funcao_desempenhada = '3' AND d.tipo_participante = '2'
+              AND v.excluido_em IS NULL AND d.excluido_em IS NULL
         ) c ON c.codigo_projeto = p.codigo_projeto
         ''', (('docente', 'c.cpf = %s'), ('situacao', 'p.situacao = %s')),
-        filtros, 'p.titulo, p.codigo_projeto, c.nome, c.cpf')
+        filtros, 'p.titulo, p.codigo_projeto, c.nome, c.cpf',
+        visibilidade='p.excluido_em IS NULL')
     projetos = {}
     for registro in registros:
         _, coordenadores = projetos.setdefault(registro['codigo_projeto'], (registro, []))
@@ -150,7 +157,8 @@ def _equipe(cur, filtros):
         JOIN participante a ON a.cpf = v.cpf
         JOIN projeto p ON p.codigo_projeto = v.codigo_projeto
         ''', (('projeto', 'v.codigo_projeto = %s'), ('funcao', 'v.funcao_desempenhada = %s')),
-        filtros, 'p.titulo, p.codigo_projeto, a.nome, a.cpf')
+        filtros, 'p.titulo, p.codigo_projeto, a.nome, a.cpf',
+        visibilidade='v.excluido_em IS NULL AND a.excluido_em IS NULL AND p.excluido_em IS NULL')
     return _tabela(
         ('Projeto', 'Participante', 'Tipo', 'Função', 'Entrada', 'Saída'), (24, 22, 17, 15, 11, 11),
         ((f"{r['codigo_projeto']} · {r['projeto']}", r['nome'], _categoria(TIPOS, r['tipo_participante']),
@@ -170,7 +178,8 @@ def _producoes(cur, filtros):
         LEFT JOIN participante a ON a.cpf = ap.cpf
         ''', (('projeto', 'c.codigo_projeto = %s'), ('ano', 'c.ano_publicacao = %s'),
               ('tipo_producao', 'c.tipo_prod = %s')),
-        filtros, 'c.ano_publicacao DESC, c.titulo, c.codigo_projeto, c.codigo_prod, a.nome, a.cpf')
+        filtros, 'c.ano_publicacao DESC, c.titulo, c.codigo_projeto, c.codigo_prod, a.nome, a.cpf',
+        visibilidade='c.excluido_em IS NULL AND p.excluido_em IS NULL')
     producoes = {}
     for registro in registros:
         chave = (registro['codigo_projeto'], registro['codigo_prod'])
@@ -191,10 +200,12 @@ def _financiamentos(cur, filtros):
         SELECT f.codigo_financiamento, f.agencia_financiadora, f.tipo_fomento, f.valor_total,
                v.valor_destinado, p.codigo_projeto, p.titulo AS projeto
         FROM financiamento f
-        LEFT JOIN vinculo_projeto_financiamento v ON v.codigo_financiamento = f.codigo_financiamento
-        LEFT JOIN projeto p ON p.codigo_projeto = v.codigo_projeto
+        LEFT JOIN vinculo_projeto_financiamento v
+          ON v.codigo_financiamento = f.codigo_financiamento AND v.excluido_em IS NULL
+        LEFT JOIN projeto p ON p.codigo_projeto = v.codigo_projeto AND p.excluido_em IS NULL
         ''', (('agencia', 'f.agencia_financiadora = %s'), ('fomento', 'f.tipo_fomento = %s')),
-        filtros, 'f.agencia_financiadora, f.codigo_financiamento, p.titulo, p.codigo_projeto')
+        filtros, 'f.agencia_financiadora, f.codigo_financiamento, p.titulo, p.codigo_projeto',
+        visibilidade='f.excluido_em IS NULL')
     contratos = {}
     for registro in registros:
         _, destinacoes = contratos.setdefault(registro['codigo_financiamento'], (registro, []))
@@ -235,21 +246,26 @@ def _resumo_financeiro(totais):
 
 
 def _multiprojetos(cur, filtros):
+    tipo_participante = filtros.get('tipo_participante')
+    if tipo_participante is not None:
+        tipo_participante = str(tipo_participante)
     registros = linhas(cur, '''
         SELECT a.cpf AS participante_id, a.nome, a.tipo_participante,
                selecionados.quantidade, p.codigo_projeto, p.titulo AS projeto
         FROM (
             SELECT cpf, COUNT(DISTINCT codigo_projeto) AS quantidade
             FROM vinculo_projeto_participante
+            WHERE excluido_em IS NULL
             GROUP BY cpf
             HAVING COUNT(DISTINCT codigo_projeto) >= %s
         ) selecionados
         JOIN participante a ON a.cpf = selecionados.cpf
         JOIN vinculo_projeto_participante v ON v.cpf = a.cpf
         JOIN projeto p ON p.codigo_projeto = v.codigo_projeto
-        WHERE (%s IS NULL OR a.tipo_participante = %s)
+        WHERE a.excluido_em IS NULL AND v.excluido_em IS NULL AND p.excluido_em IS NULL
+          AND (%s IS NULL OR a.tipo_participante = %s)
         ORDER BY selecionados.quantidade DESC, a.nome, a.cpf, p.titulo, p.codigo_projeto
-    ''', (filtros['minimo'], filtros.get('tipo_participante'), filtros.get('tipo_participante')))
+    ''', (filtros['minimo'], tipo_participante, tipo_participante))
     participantes = {}
     for registro in registros:
         _, projetos = participantes.setdefault(registro['participante_id'], (registro, []))

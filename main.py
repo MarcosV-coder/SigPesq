@@ -5,6 +5,7 @@ from tkinter import messagebox
 from concurrent.futures import ThreadPoolExecutor
 from queue import Queue, Empty
 from decimal import Decimal
+from collections import Counter
 import unicodedata
 import customtkinter as ctk
 import repositorio as repo
@@ -13,6 +14,7 @@ from seguranca import autenticar
 from validacao import formatar
 from mascaras import aplicar_mascara
 from db import mensagem_erro
+from relatorios import AbaRelatorios
 from visual import *
 
 
@@ -29,8 +31,8 @@ class App(ctk.CTk):
         self.sessao=None; self.pendente=False; self.modal=None; self.modulo=None
         self.pool=ThreadPoolExecutor(max_workers=1); self.fila=Queue()
         self.status=tk.StringVar()
-        self.header=ctk.CTkFrame(self,fg_color=FUNDO,corner_radius=0,height=116)
-        self.header.pack(fill='x'); self.header.pack_propagate(False)
+        self.header=ctk.CTkFrame(self,fg_color=FUNDO,corner_radius=0)
+        self.header.pack(fill='x')
         self.body=ctk.CTkFrame(self,fg_color=FUNDO,corner_radius=0)
         self.body.pack(fill='both',expand=True,padx=28,pady=(8,0))
         label(self,textvariable=self.status,text='',size=11,color=MUTED,height=22).pack(fill='x',padx=28,pady=(0,4))
@@ -66,17 +68,19 @@ class App(ctk.CTk):
         self.pool.shutdown(wait=False,cancel_futures=True); self.destroy()
 
     def cabecalho(self,ativo=None):
-        top=ctk.CTkFrame(self.header,fg_color='transparent',height=62)
-        top.pack(side='top',fill='x'); top.pack_propagate(False)
-        logo=ctk.CTkButton(top,text='SIGPesq',font=fonte(20,True),fg_color='transparent',text_color=TITULO,
-                          hover_color=CLARO,width=100,command=self.home if self.sessao else self.login)
-        logo.pack(side='left',padx=(24,12),pady=20)
+        top=ctk.CTkFrame(self.header,fg_color='transparent')
+        top.pack(side='top',fill='x')
+        fonte_logo=ctk.CTkFont(family=FONTE,size=22,weight='bold')
+        logo=ctk.CTkButton(top,text='SIGPesq',font=fonte_logo,fg_color='transparent',text_color=TITULO,
+                          hover_color=CLARO,width=fonte_logo.measure('SIGPesq')+24,height=40,
+                          command=self.home if self.sessao else self.login)
+        logo.pack(side='left',padx=(24,12),pady=11)
         ctk.CTkFrame(top,fg_color='#ccd4e1',width=1,height=22).pack(side='left',padx=(0,12))
         if self.sessao:
             # Navegação em linha própria deixa espaço para o nome completo.
             nav=ctk.CTkFrame(self.header,fg_color='transparent',height=42)
             nav.pack(side='bottom',fill='x',padx=24,pady=(0,6))
-            for k,n in NAV.items():
+            for k,n in {**NAV, 'relatorios': 'Relatórios'}.items():
                 btn=ctk.CTkButton(nav,text=n,font=fonte(13,k==ativo),width=10,height=34,corner_radius=8,
                                   fg_color=TITULO if k==ativo else 'transparent',
                                   hover_color=AZUL if k==ativo else CLARO,text_color=BRANCO if k==ativo else TEXTO,
@@ -148,6 +152,9 @@ class App(ctk.CTk):
     def consulta(self,modulo):
         if self.pendente or self.modal: return
         self.limpar(); self.modulo=modulo; self.cabecalho(modulo)
+        if modulo=='relatorios':
+            AbaRelatorios(self)
+            return
         titulo,subtitulo,tabela,novo=PAGINAS[modulo]
         heading=ctk.CTkFrame(self.body,fg_color='transparent'); heading.pack(fill='x',pady=(9,22))
         left=ctk.CTkFrame(heading,fg_color='transparent'); left.pack(side='left',fill='x',expand=True)
@@ -177,6 +184,8 @@ class App(ctk.CTk):
         botao(filters,'Atualizar',self.carregar,kind='secondary',icon='refresh',width=100,height=40).pack(side='right')
         self.busca.trace_add('write',lambda *_:self.filtrar())
         self.colunas=COLUNAS[modulo]
+        if not self.sessao.admin:
+            self.colunas=[coluna for coluna in self.colunas if coluna[0]!='CPF']
         self.table_head=ctk.CTkFrame(self.panel,fg_color=CLARO,corner_radius=0,height=56)
         self.table_head.pack(fill='x',padx=(22,37)); self.table_head.pack_propagate(False)
         self.table_head.grid_propagate(False)
@@ -214,8 +223,33 @@ class App(ctk.CTk):
     def texto(self,col,value):
         campo=next((c for c in MODELOS[self.modulo]['campos'] if c.nome==col),None)
         if campo and campo.opcoes: return dict(campo.opcoes).get(value,'Desconhecido')
+        if campo and campo.tipo=='participante':
+            nome=dict(self.opcoes.get('participante',[])).get(value)
+            if nome is None:
+                return 'Participante indisponível'
+            return f'{nome} · {value}' if self.sessao.admin else nome
         if campo and campo.tipo in self.opcoes: return dict(self.opcoes[campo.tipo]).get(value,formatar(value))
         return formatar(value)
+
+    def campos_consulta(self):
+        return [
+            campo for campo in MODELOS[self.modulo]['campos']
+            if campo.nome!='senha'
+            and not (self.modulo=='participantes' and campo.nome=='cpf' and not self.sessao.admin)
+        ]
+
+    def opcoes_participantes(self):
+        participantes=self.opcoes.get('participante',[])
+        if self.sessao.admin:
+            return [(cpf,f'{nome} · {cpf}') for cpf,nome in participantes]
+        totais=Counter(nome for _,nome in participantes)
+        exibidos=Counter()
+        opcoes=[]
+        for cpf,nome in participantes:
+            exibidos[nome]+=1
+            rotulo=f'{nome} ({exibidos[nome]})' if totais[nome]>1 else nome
+            opcoes.append((cpf,rotulo))
+        return opcoes
 
     def pode(self,r=None):
         s=self.sessao; m=self.modulo
@@ -233,8 +267,11 @@ class App(ctk.CTk):
         self.linhas_visuais=[]; self.atual=None
         q=normalizar(self.busca.get()); filtro=self.filtro.get()
         for r in self.registros:
-            textos=[self.texto(c.nome,r.get(c.nome)) for c in MODELOS[self.modulo]['campos'] if c.nome!='senha']
-            textos.extend(str(v) for v in r.values())
+            textos=[self.texto(c.nome,r.get(c.nome)) for c in self.campos_consulta()]
+            if self.sessao.admin:
+                textos.extend(str(v) for v in r.values())
+            else:
+                textos.extend(r[k] for k in ('coordenacao','equipes','projetos_apoiados','nomes_autores') if k in r)
             if q not in normalizar(' '.join(textos)): continue
             if self.campo_filtro and filtro!='Todos' and self.texto(self.campo_filtro.nome,r.get(self.campo_filtro.nome))!=filtro: continue
             self.inserir_linha(r,len(self.linhas_visuais))
@@ -257,14 +294,20 @@ class App(ctk.CTk):
         if m=='projetos':
             return [texto(r['codigo_projeto']),texto(r['titulo'],True),texto(r.get('descricao') or '-'),texto(r.get('coordenacao') or 'Sem coordenação'),vigencia(),self.texto('situacao',r['situacao'])]
         if m=='participantes':
-            return [texto(r['cpf']),texto(r['nome'],True),texto(r['email']),self.texto('tipo_participante',r['tipo_participante'])]
+            dados=[texto(r['nome'],True),texto(r['email']),self.texto('tipo_participante',r['tipo_participante'])]
+            if self.sessao.admin:
+                dados.insert(0,texto(r['cpf']))
+            return dados
         if m=='financiamentos':
             return [texto(r['codigo_financiamento']),self.texto('agencia_financiadora',r['agencia_financiadora']),texto(self.texto('tipo_fomento',r['tipo_fomento'])),texto(r.get('projetos_apoiados') or 'Sem destinação'),texto(formatar(r['valor_total']),True),vigencia()]
         if m=='producoes':
             return [texto(r['codigo_prod']),texto(r['titulo'],True),texto(projeto()),texto(r.get('nomes_autores') or 'Autoria pendente de definição'),texto(self.texto('tipo_prod',r['tipo_prod'])),texto(self.texto('meio_divulgacao',r['meio_divulgacao'])),texto(r['ano_publicacao'])]
         if m=='vinculos':
-            nome=dict(self.opcoes['participante']).get(r['cpf'],r['cpf']).rsplit(' · ',1)[0]
-            return [texto(projeto()),texto(r['cpf']),texto(nome,True),self.texto('funcao_desempenhada',r['funcao_desempenhada']),vigencia()]
+            nome=dict(self.opcoes['participante']).get(r['cpf'],'Participante indisponível')
+            dados=[texto(projeto()),texto(nome,True),self.texto('funcao_desempenhada',r['funcao_desempenhada']),vigencia()]
+            if self.sessao.admin:
+                dados.insert(1,texto(r['cpf']))
+            return dados
         return [texto(projeto()),texto(self.texto('codigo_financiamento',r['codigo_financiamento'])),texto(formatar(r['valor_destinado']),True)]
 
     def inserir_linha(self,r,index):
@@ -337,8 +380,7 @@ class App(ctk.CTk):
         label(win,'Detalhes do registro',size=23,bold=True,color=TITULO).pack(anchor='w',padx=28,pady=(24,3))
         label(win,'Informações completas do cadastro selecionado.',size=12,color=MUTED).pack(anchor='w',padx=28,pady=(0,16))
         area=ctk.CTkScrollableFrame(win,fg_color=BRANCO,corner_radius=10); area.pack(fill='both',expand=True,padx=24,pady=(0,18))
-        for c in MODELOS[self.modulo]['campos']:
-            if c.nome=='senha': continue
+        for c in self.campos_consulta():
             label(area,c.rotulo.upper(),size=11,bold=True,color=MUTED).pack(anchor='w',padx=12,pady=(14,2))
             w=label(area,self.texto(c.nome,r.get(c.nome)),size=14,color=TITULO,anchor='w',justify='left',wraplength=550)
             w.pack(fill='x',padx=12)
@@ -384,14 +426,17 @@ class App(ctk.CTk):
         card.pack(fill='both',expand=True,padx=24,pady=(0,14))
         area=ctk.CTkScrollableFrame(card,fg_color=BRANCO,corner_radius=12); area.pack(fill='both',expand=True,padx=10,pady=8)
         widgets={}; maps={}; self.form_widgets=widgets; self.form_maps=maps
+        ocultar_cpf=modulo=='participantes' and registro is not None and not self.sessao.admin
         for c in m['campos']:
+            if ocultar_cpf and c.nome=='cpf':
+                continue
             rotulo=c.rotulo if c.nome!='senha' else 'Senha'
             label(area,rotulo.upper()+(' *' if c.obrigatorio or (c.nome=='senha' and not registro) else ''),size=11,bold=True,anchor='w').pack(fill='x',padx=12,pady=(14,6))
             value=registro.get(c.nome) if registro else None
             if c.tipo=='multilinha':
                 w=ctk.CTkTextbox(area,height=100,fg_color=CLARO,border_width=0,text_color=TITULO,font=fonte(13),wrap='word'); w.insert('1.0',value or '')
             elif c.opcoes or c.tipo in ('projeto','participante','financiamento'):
-                options=list(c.opcoes or self.opcoes.get(c.tipo,[]))
+                options=self.opcoes_participantes() if c.tipo=='participante' else list(c.opcoes or self.opcoes.get(c.tipo,[]))
                 if cadastro and c.nome=='tipo_participante': options=list(TIPOS[:1])
                 if not cadastro and c.nome=='codigo_projeto' and not self.sessao.admin and not registro: options=[(k,v) for k,v in options if k in self.permitidos]
                 maps[c.nome]={str(v):k for k,v in options}
@@ -437,6 +482,9 @@ class App(ctk.CTk):
         def salvar():
             dados={}
             for c in m['campos']:
+                if ocultar_cpf and c.nome=='cpf':
+                    dados[c.nome]=registro[c.nome]
+                    continue
                 w=widgets[c.nome]; v=w.get('1.0','end-1c') if c.tipo=='multilinha' else w.get()
                 dados[c.nome]=maps[c.nome].get(v) if c.nome in maps else v
             if modulo=='producoes': dados['autores']=[cpf for cpf,var in autores_vars.items() if var.get()]

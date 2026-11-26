@@ -39,7 +39,7 @@ def carregar(modulo,s):
         rows=linhas(cur,f"SELECT {','.join(cols)} FROM {m['tabela']}")
         projetos=linhas(cur,'SELECT codigo_projeto,titulo FROM projeto')
         opcoes={'projeto':[(r['codigo_projeto'],f"{r['codigo_projeto']} · {r['titulo']}") for r in projetos],
-                'participante':[(r['cpf'],r['nome']+' · '+r['cpf']) for r in linhas(cur,'SELECT cpf,nome FROM participante')],
+                'participante':[(r['cpf'],r['nome']) for r in linhas(cur,'SELECT cpf,nome FROM participante ORDER BY nome,cpf')],
                 'financiamento':[(r['codigo_financiamento'],str(r['codigo_financiamento'])) for r in linhas(cur,'SELECT codigo_financiamento FROM financiamento')]}
         # Dados derivados para a consulta visual; nenhuma coluna nova no banco.
         nomes=dict(opcoes['participante'])
@@ -50,7 +50,7 @@ def carregar(modulo,s):
             funcoes=dict(FUNCOES)
             for r in rows:
                 if modulo=='projetos':
-                    r['coordenacao']=', '.join(nomes.get(v['cpf'],v['cpf']).rsplit(' · ',1)[0] for v in vinculos if v['codigo_projeto']==r['codigo_projeto'] and v['funcao_desempenhada']==3)
+                    r['coordenacao']=', '.join(nomes.get(v['cpf'],'Participante indisponível') for v in vinculos if v['codigo_projeto']==r['codigo_projeto'] and v['funcao_desempenhada']==3)
                 else:
                     r['equipes']='; '.join(titulos[v['codigo_projeto']]+' / '+funcoes.get(v['funcao_desempenhada'],'Sem função') for v in vinculos if v['cpf']==r['cpf'] and v['codigo_projeto'] in titulos)
         if modulo=='financiamentos':

@@ -12,14 +12,15 @@ Tenha MySQL Server em execução, MySQL Workbench e Python 3.10 ou superior.
    **MySQL Connections** e use **Standard (TCP/IP)**, servidor `127.0.0.1`,
    porta `3306`, usuário `root` e a senha definida na instalação do MySQL.
    Clique em **Test Connection**, salve e abra a conexão.
-2. Em **File > Open SQL Script**, abra e execute `database/01_banco.sql` inteiro.
-3. Abra e execute `database/02_dados_iniciais.sql` inteiro.
+2. Em **File > Open SQL Script**, abra e execute `database/bancoDeDados.sql` inteiro.
+3. Abra e execute `database/dadosTeste.sql` inteiro.
 
-A base utilizada é **`sigpesq`**.
+A base utilizada é **`sigpesq`**. O script `bancoDeDados.sql` apaga e recria essa base.
+Para usar uma base `sigpesq` já preenchida, execute apenas `database/migrarCategorias.sql` no Workbench.
 
 ## 2. Conectar o Python
 
-No terminal, dentro da pasta `SigPesq`, execute:
+No terminal, dentro da pasta do projeto, execute:
 
 ```console
 python -m venv .venv
@@ -66,7 +67,7 @@ A busca e o filtro ajudam na consulta e realizam os requisitos de busca específ
 
 ## Acesso dos participantes
 
-O login dos participantes continua disponível por e-mail ou CPF e senha.
+Os participantes entram com e-mail ou CPF e senha.
 Todos os usuários autenticados consultam os mesmos projetos, participantes,
 financiamentos, produções, vínculos e destinações. Senhas nunca são exibidas.
 As permissões variam somente nas operações de cadastro, edição e exclusão:
@@ -76,8 +77,7 @@ As permissões variam somente nas operações de cadastro, edição e exclusão:
 | Administrador | Cadastrar, editar e excluir em todas as seções |
 | Docente | Criar projetos; ao criar, é vinculado como coordenador |
 | Coordenador ativo | Editar o projeto que coordena e gerenciar seus registros relacionados |
-| Técnico ativo no projeto | Editar esse projeto e gerenciar seus registros relacionados; não cria projetos |
-| Discente sem coordenação | Consultar tudo e atualizar seus próprios dados pessoais |
+| Técnico-administrativo ou discente | Consultar tudo e atualizar seus próprios dados pessoais |
 
 O cadastro opcional cria uma conta discente. O administrador define os tipos
 Docente e Técnico-administrativo.
@@ -96,32 +96,3 @@ do projeto 101, `bruno@exemplo.com` é técnico vinculado ao 101 e
   validações e permissões adicionais são tratadas na aplicação.
 - No Linux/macOS, substitua `.venv\Scripts\python` por `.venv/bin/python`.
   O Python precisa ter Tkinter disponível.
-
-
-## Autores das produções científicas
-
-Para um banco que já existe, execute `database/03_autores.sql` no Workbench
-antes de abrir esta versão. Esse script somente cria a tabela de autorias.
-Não execute novamente os scripts de criação e dados iniciais no banco existente.
-Para uma instalação nova, execute `01_banco.sql` e depois `02_dados_iniciais.sql`.
-
-No cadastro ou edição de uma produção, escolha o projeto e marque um ou mais
-autores. Somente os participantes vinculados àquele projeto são oferecidos.
-A lista muda quando o projeto é alterado. Os autores salvos aparecem em Detalhes
-e podem ser encontrados pela busca da consulta de produções.
-A aplicação exige pelo menos um autor, confirma o vínculo novamente ao salvar
-e grava produção e autoria na mesma transação.
-
-A nova tabela `autoria_producao` identifica cada autoria por
-`(codigo_projeto, codigo_prod, cpf)`. Uma FK composta aponta para a produção
-com cascatas de atualização e exclusão. Outra aponta para o vínculo da equipe,
-com atualização em cascata e exclusão restrita para preservar a autoria.
-Remova ou substitua o autor nas produções antes de excluir seu vínculo ou conta.
-Excluir um projeto pela aplicação remove suas produções, autorias e vínculos.
-
-Produções antigas continuam preservadas, com autoria pendente; abra cada uma
-para definir seus autores reais. Não são escolhidos autores automaticamente.
-Vínculos encerrados também podem ser autores, preservando a autoria histórica;
-não há exigência de vínculo ativo na data atual.
-O banco agora possui sete tabelas. O roteiro de revisão anterior descrevia a
-versão com seis tabelas e deve considerar essa nova associação de autoria.
